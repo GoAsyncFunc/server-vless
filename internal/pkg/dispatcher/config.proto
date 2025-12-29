@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package goasyncfunc.server.vless.dispatcher;
+
+option csharp_namespace = "goasyncfunc.server.vless.dispatcher";
+option go_package = "github.com/GoAsyncFunc/server-vless/internal/pkg/dispatcher";
+option java_package = "com.goasyncfunc.server.vless.dispatcher";
+option java_multiple_files = true;
+
+message Config {
+  message SessionConfig {
+  }
+} // Empty config as we don't need settings for now
