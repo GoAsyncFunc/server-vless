@@ -44,7 +44,7 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 	inboundDetourConfig.SniffingConfig = sniffingConfig
 
 	// Protocol
-	inboundDetourConfig.Protocol = "vless"
+	inboundDetourConfig.Protocol = api.Vless
 
 	// Stream Settings
 	streamSetting, err := buildStreamConfig(vlessInfo, nodeInfo, config)
