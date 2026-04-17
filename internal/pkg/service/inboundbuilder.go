@@ -37,7 +37,7 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 		Enabled: true, // Enabled for Vision support
 		// Default dest override options?
 		// "http", "tls", "quic" -> Only "http", "tls" supported by current deps
-		DestOverride: &conf.StringList{
+		DestOverride: conf.StringList{
 			"http", "tls",
 		},
 	}
