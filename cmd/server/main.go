@@ -98,7 +98,7 @@ func main() {
 				Destination: &serviceConfig.FetchUsersInterval,
 			},
 			&cli.DurationFlag{
-				Name:        "report_traffics_interval, fui",
+				Name:        "report_traffics_interval, rti",
 				Usage:       "API request cycle(report traffics), unit: second",
 				EnvVars:     []string{"REPORT_TRAFFICS_INTERVAL"},
 				Value:       time.Second * 80,

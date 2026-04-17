@@ -34,6 +34,7 @@ type Builder struct {
 	nodeInfo                       *api.NodeInfo
 	inboundTag                     string
 	userList                       []api.UserInfo
+	pendingTraffic                 map[int][2]int64
 	mu                             sync.RWMutex
 	apiClient                      *api.Client
 	fetchUsersMonitorPeriodic      *task.Periodic
@@ -250,25 +251,35 @@ func (b *Builder) reportTrafficsMonitor() error {
 	tag := b.inboundTag
 	b.mu.RUnlock()
 
-	userTraffic := make([]api.UserTraffic, 0, len(users))
+	if b.pendingTraffic == nil {
+		b.pendingTraffic = make(map[int][2]int64)
+	}
+
 	for _, user := range users {
 		email := buildUserEmail(tag, user.Id, user.Uuid)
-		up, down, _ := b.getTraffic(email) // Count not used in uniproxy v1? Check model.
+		up, down, _ := b.getTraffic(email)
 		if up > 0 || down > 0 {
-			userTraffic = append(userTraffic, api.UserTraffic{
-				UID:      user.Id,
-				Upload:   int64(up),
-				Download: int64(down),
-			})
+			prev := b.pendingTraffic[user.Id]
+			b.pendingTraffic[user.Id] = [2]int64{prev[0] + up, prev[1] + down}
 		}
 	}
-	if len(userTraffic) > 0 {
+
+	if len(b.pendingTraffic) > 0 {
+		userTraffic := make([]api.UserTraffic, 0, len(b.pendingTraffic))
+		for uid, t := range b.pendingTraffic {
+			userTraffic = append(userTraffic, api.UserTraffic{
+				UID:      uid,
+				Upload:   t[0],
+				Download: t[1],
+			})
+		}
 		log.Infof("%d user traffic needs to be reported", len(userTraffic))
 		err := b.apiClient.ReportUserTraffic(b.ctx, userTraffic)
 		if err != nil {
-			log.Errorln("server error when submitting traffic", err)
+			log.Errorln("server error when submitting traffic, will retry next cycle:", err)
 			return nil
 		}
+		b.pendingTraffic = make(map[int][2]int64)
 	}
 	return nil
 }
