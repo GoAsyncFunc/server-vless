@@ -76,11 +76,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("node info is empty")
 	}
 
-	// Update serviceConfig NodeID if needed (though client has it)
 	s.serviceConfig.NodeID = nodeConfig.Id
-
-	// Registration: uniproxy implementation seems to not imply explicit Register call.
-	// We proceed to build services.
 
 	inboundHandlerConfig, err := service.InboundBuilder(s.serviceConfig, nodeConfig)
 	if err != nil {
@@ -127,7 +123,7 @@ func (s *Server) Start() error {
 func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConfig *core.OutboundHandlerConfig) (*core.Config, error) {
 	logConfig := &conf.LogConfig{}
 	logConfig.LogLevel = s.config.LogLevel
-	logConfig.DNSLog = false // match server-vless1 default
+	logConfig.DNSLog = false
 	if s.config.LogLevel != LogLevelDebug {
 		logConfig.AccessLog = "none"
 		logConfig.ErrorLog = "none"
@@ -137,7 +133,6 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	inboundConfigs := []*core.InboundHandlerConfig{inboundConfig}
 	outBoundConfigs := []*core.OutboundHandlerConfig{outboundConfig}
 
-	// PolicyConfig
 	policyConfig := &conf.PolicyConfig{}
 	pbPolicy := &conf.Policy{
 		StatsUserUplink:   true,
@@ -145,10 +140,12 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		StatsUserOnline:   true,
 	}
 	policyConfig.Levels = map[uint32]*conf.Policy{0: pbPolicy}
-	pbPolicyConfig, _ := policyConfig.Build()
+	pbPolicyConfig, err := policyConfig.Build()
+	if err != nil {
+		return nil, fmt.Errorf("build policy config: %w", err)
+	}
 
-	// Public DNS - Use Google DNS (8.8.8.8) directly via protobuf
-	// This enables domainStrategy: UseIPv4 in inbound/outbound to fix IPv6 hangs.
+	// Public DNS — enables domainStrategy: UseIPv4 in outbound to fix IPv6 hangs.
 	pbDnsConfig := &dns.Config{
 		NameServer: []*dns.NameServer{
 			{
@@ -164,16 +161,18 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		},
 	}
 
-	// Routing config
 	routerConfig := &conf.RouterConfig{}
-	pbRouteConfig, _ := routerConfig.Build()
+	pbRouteConfig, err := routerConfig.Build()
+	if err != nil {
+		return nil, fmt.Errorf("build router config: %w", err)
+	}
 
 	pbCoreConfig := &core.Config{
 		App: []*serial.TypedMessage{
 			serial.ToTypedMessage(pbLogConfig),
 			serial.ToTypedMessage(pbPolicyConfig),
 			serial.ToTypedMessage(&stats.Config{}),
-			serial.ToTypedMessage(&dispatcher.Config{}), // Custom dispatcher
+			serial.ToTypedMessage(&dispatcher.Config{}),
 			serial.ToTypedMessage(&proxyman.InboundConfig{}),
 			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
 			serial.ToTypedMessage(pbRouteConfig),

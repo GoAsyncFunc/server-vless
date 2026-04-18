@@ -34,11 +34,9 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 
 	// Sniffing
 	sniffingConfig := &conf.SniffingConfig{
-		Enabled: true, // Enabled for Vision support
-		// Default dest override options?
-		// "http", "tls", "quic" -> Only "http", "tls" supported by current deps
+		Enabled: true,
 		DestOverride: conf.StringList{
-			"http", "tls",
+			"http", "tls", "quic",
 		},
 	}
 	inboundDetourConfig.SniffingConfig = sniffingConfig
@@ -55,61 +53,33 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 
 	// VLESS Encryption/Decryption
 	decryption := "none"
-	if vlessInfo.Encryption != "" {
-		switch vlessInfo.Encryption {
-		case "mlkem768x25519plus": // Support for latest Xray encryption
-			encSettings := vlessInfo.EncryptionSettings
-			// Format: "mlkem768x25519plus.<mode>.<ticket>.<padding>.<private_key>"
-			// If padding is empty, it is omitted? No, V2bX joins all parts?
-			// V2bX code:
-			// parts := []string{"mlkem768x25519plus", encSettings.Mode, encSettings.Ticket}
-			// if encSettings.ServerPadding != "" { parts = append(parts, encSettings.ServerPadding) }
-			// parts = append(parts, encSettings.PrivateKey)
-			// decryption = strings.Join(parts, ".")
-
-			// Note: strings package needed
-			decryption = fmt.Sprintf("mlkem768x25519plus.%s.%s", encSettings.Mode, encSettings.Ticket)
-			if encSettings.ServerPadding != "" {
-				decryption += "." + encSettings.ServerPadding
-			}
-			decryption += "." + encSettings.PrivateKey
-		default:
-			// Unsupported encryption: log error but fallback to "none"?
-			// Or return "none" if it's just "none"?
-			if vlessInfo.Encryption == "none" {
-				decryption = "none"
-			} else {
-				// Warn but don't crash, fallback to none
-				// Or strict error? V2bX errors.
-				// Let's stick to error ONLY if it's clearly a configured algo we don't support.
-				// If "none", it's fine.
-				return nil, fmt.Errorf("vless decryption method %s is not supported", vlessInfo.Encryption)
-			}
+	switch vlessInfo.Encryption {
+	case "", "none":
+		// decryption stays "none"
+	case "mlkem768x25519plus":
+		// Format: "mlkem768x25519plus.<mode>.<ticket>[.<padding>].<private_key>"
+		enc := vlessInfo.EncryptionSettings
+		decryption = fmt.Sprintf("mlkem768x25519plus.%s.%s", enc.Mode, enc.Ticket)
+		if enc.ServerPadding != "" {
+			decryption += "." + enc.ServerPadding
 		}
+		decryption += "." + enc.PrivateKey
+	default:
+		return nil, fmt.Errorf("vless decryption method %s is not supported", vlessInfo.Encryption)
 	}
 
-	// Prepare Clients placeholders (users added dynamically, but we need empty array)
 	clients := []json.RawMessage{}
-
-	// Fallbacks
-	type Fallback struct {
-		Alpn string          `json:"alpn,omitempty"`
-		Path string          `json:"path,omitempty"`
-		Dest json.RawMessage `json:"dest"`
-		Xver int             `json:"xver,omitempty"`
-	}
 	type VLESSSettings struct {
 		Clients    []json.RawMessage `json:"clients"`
 		Decryption string            `json:"decryption"`
-		Fallbacks  []*Fallback       `json:"fallbacks,omitempty"`
 	}
-
-	settings := VLESSSettings{
+	settingsBytes, err := json.Marshal(VLESSSettings{
 		Clients:    clients,
 		Decryption: decryption,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal vless settings: %w", err)
 	}
-
-	settingsBytes, _ := json.Marshal(settings)
 	settingsJSON := json.RawMessage(settingsBytes)
 	inboundDetourConfig.Settings = &settingsJSON
 
@@ -144,7 +114,6 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 		streamSetting.GRPCSettings = &conf.GRPCConfig{}
 	}
 
-	// Security (TLS / Reality)
 	// Security (TLS / Reality)
 	tlsSettings := new(conf.TLSConfig)
 	switch nodeInfo.Security {
@@ -193,9 +162,10 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 
 func buildTCPConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode) error {
 	tcpConfig := new(conf.TCPConfig)
-	if err := json.Unmarshal(vlessInfo.NetworkSettings, tcpConfig); err == nil {
-		streamSetting.TCPSettings = tcpConfig
+	if err := json.Unmarshal(vlessInfo.NetworkSettings, tcpConfig); err != nil {
+		return fmt.Errorf("unmarshal tcp config error: %w", err)
 	}
+	streamSetting.TCPSettings = tcpConfig
 	return nil
 }
 

@@ -235,8 +235,21 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	}
 
 	// 5. Update state
+	oldTag := b.inboundTag
 	b.nodeInfo = newNodeInfo
 	b.inboundTag = newInboundConfig.Tag
+
+	// 5a. Unregister old stats counters/online maps when tag changes
+	if oldTag != b.inboundTag {
+		if sm, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager); ok {
+			for _, u := range b.userList {
+				email := buildUserEmail(oldTag, u.Id, u.Uuid)
+				_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>uplink")
+				_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>downlink")
+				_ = sm.UnregisterOnlineMap("user>>>" + email + ">>>online")
+			}
+		}
+	}
 
 	// 6. Re-add current users to new inbound
 	if len(b.userList) > 0 {
