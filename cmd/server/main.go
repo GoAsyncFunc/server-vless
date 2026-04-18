@@ -20,9 +20,11 @@ import (
 
 const (
 	Name      = "vless-node"
-	Version   = "0.0.1"
 	CopyRight = "GoAsyncFunc@2025"
 )
+
+// Version is injected at build time via -ldflags "-X main.Version=..."
+var Version = "dev"
 
 func main() {
 	cli.VersionPrinter = func(c *cli.Context) {
@@ -34,7 +36,6 @@ func main() {
 	var serviceConfig service.Config
 	var certConfig service.CertConfig
 	var extConfPath string
-	var dataDir string
 
 	app := &cli.App{
 		Name:      Name,
@@ -124,15 +125,6 @@ func main() {
 				Destination: &config.LogLevel,
 				Required:    false,
 			},
-			&cli.StringFlag{
-				Name:        "data_dir",
-				Usage:       "Data directory for persisting state and other data",
-				EnvVars:     []string{"DATA_DIR"},
-				Value:       "/var/lib/vless-node",
-				DefaultText: "/var/lib/vless-node",
-				Required:    false,
-				Destination: &dataDir,
-			},
 		},
 		Before: func(c *cli.Context) error {
 			log.SetFormatter(&log.TextFormatter{})
@@ -167,7 +159,7 @@ func main() {
 			// Ensure NodeType is set properly
 			apiConfig.NodeType = api.Vless
 
-			serv, err := server.New(&config, &apiConfig, &serviceConfig, extFileBytes, dataDir)
+			serv, err := server.New(&config, &apiConfig, &serviceConfig, extFileBytes)
 			if err != nil {
 				return fmt.Errorf("failed to create server: %w", err)
 			}

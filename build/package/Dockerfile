@@ -6,10 +6,11 @@ COPY . .
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG VERSION=dev
 
 ENV CGO_ENABLED=0
 RUN go mod download
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -v -o vless-node -trimpath -ldflags "-s -w" ./cmd/server
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -v -o vless-node -trimpath -ldflags "-s -w -X main.Version=${VERSION}" ./cmd/server
 
 # Release
 FROM alpine

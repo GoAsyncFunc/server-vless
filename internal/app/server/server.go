@@ -27,38 +27,28 @@ const (
 	LogLevelDebug    = "debug"
 	LogLevelInfo     = "info"
 	LogLevelError    = "error"
-	DefaultDataDir   = "/var/lib/vless-node"
 	DefaultDNSServer = "8.8.8.8"
 )
 
 type Server struct {
 	instance      *core.Instance
-	logLevel      string
 	serviceConfig *service.Config
 	apiClient     *api.Client
 	config        *Config
 	extConfBytes  []byte
 	service       *service.Builder
 	mu            sync.Mutex
-	dataDir       string
 	ctx           context.Context
 	cancel        context.CancelFunc
 }
 
-func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config, extConfBytes []byte, dataDir string) (*Server, error) {
-	// API Client initialization
+func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config, extConfBytes []byte) (*Server, error) {
 	client := api.New(apiConfig)
-	if dataDir == "" {
-		// dataDir = DefaultDataDir // DefaultDataDir not defined? Use literal or invalid
-		dataDir = "/var/lib/vless-node"
-	}
 	return &Server{
 		config:        config,
-		logLevel:      config.LogLevel,
 		apiClient:     client,
 		serviceConfig: serviceConfig,
 		extConfBytes:  extConfBytes,
-		dataDir:       dataDir,
 	}, nil
 }
 
@@ -78,17 +68,12 @@ func (s *Server) Start() error {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	ctx := s.ctx
 
-	// Fetch node config
-	// uniproxy Client stores NodeID/Type internally, so we just call GetNodeInfo(ctx)
 	nodeConfig, err := s.apiClient.GetNodeInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("get node info error: %s", err)
 	}
-	// If uniproxy returns nil (Not Modified) on first call?
-	// Usually first call should return data if client is fresh.
-	// But check nil safety.
 	if nodeConfig == nil {
-		return fmt.Errorf("node info is empty (or 304 Not Modified on first start)")
+		return fmt.Errorf("node info is empty")
 	}
 
 	// Update serviceConfig NodeID if needed (though client has it)
@@ -157,6 +142,7 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	pbPolicy := &conf.Policy{
 		StatsUserUplink:   true,
 		StatsUserDownlink: true,
+		StatsUserOnline:   true,
 	}
 	policyConfig.Levels = map[uint32]*conf.Policy{0: pbPolicy}
 	pbPolicyConfig, _ := policyConfig.Build()

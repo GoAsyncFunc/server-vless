@@ -20,12 +20,10 @@ import (
 
 type Config struct {
 	NodeID                 int
-	NodeType               string
 	FetchUsersInterval     time.Duration
 	ReportTrafficsInterval time.Duration
 	HeartbeatInterval      time.Duration
 	Cert                   *CertConfig
-	ListenAddr             string
 }
 
 type Builder struct {
@@ -150,6 +148,7 @@ func (b *Builder) fetchUsersMonitor() error {
 		deletedEmail := make([]string, len(deleted))
 		for i, u := range deleted {
 			deletedEmail[i] = buildUserEmail(b.inboundTag, u.Id, u.Uuid)
+			delete(b.pendingTraffic, u.Id)
 		}
 		if err := b.removeUsers(deletedEmail, b.inboundTag); err != nil {
 			log.Errorln(err)
@@ -188,7 +187,10 @@ func (b *Builder) checkNodeConfigMonitor() error {
 			b.nodeInfo.Vless.Flow == newNodeInfo.Vless.Flow &&
 			b.nodeInfo.Vless.Network == newNodeInfo.Vless.Network &&
 			b.nodeInfo.Vless.Tls == newNodeInfo.Vless.Tls &&
-			reflect.DeepEqual(b.nodeInfo.Vless.NetworkSettings, newNodeInfo.Vless.NetworkSettings) {
+			b.nodeInfo.Vless.Encryption == newNodeInfo.Vless.Encryption &&
+			reflect.DeepEqual(b.nodeInfo.Vless.NetworkSettings, newNodeInfo.Vless.NetworkSettings) &&
+			reflect.DeepEqual(b.nodeInfo.Vless.TlsSettings, newNodeInfo.Vless.TlsSettings) &&
+			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) {
 			return nil // No change
 		}
 	}
@@ -246,11 +248,9 @@ func (b *Builder) checkNodeConfigMonitor() error {
 }
 
 func (b *Builder) reportTrafficsMonitor() error {
-	b.mu.RLock()
+	b.mu.Lock()
 	users := b.userList
 	tag := b.inboundTag
-	b.mu.RUnlock()
-
 	if b.pendingTraffic == nil {
 		b.pendingTraffic = make(map[int][2]int64)
 	}
@@ -264,30 +264,62 @@ func (b *Builder) reportTrafficsMonitor() error {
 		}
 	}
 
-	if len(b.pendingTraffic) > 0 {
-		userTraffic := make([]api.UserTraffic, 0, len(b.pendingTraffic))
-		for uid, t := range b.pendingTraffic {
-			userTraffic = append(userTraffic, api.UserTraffic{
-				UID:      uid,
-				Upload:   t[0],
-				Download: t[1],
-			})
-		}
-		log.Infof("%d user traffic needs to be reported", len(userTraffic))
-		err := b.apiClient.ReportUserTraffic(b.ctx, userTraffic)
-		if err != nil {
-			log.Errorln("server error when submitting traffic, will retry next cycle:", err)
-			return nil
-		}
-		b.pendingTraffic = make(map[int][2]int64)
+	if len(b.pendingTraffic) == 0 {
+		b.mu.Unlock()
+		return nil
 	}
+
+	userTraffic := make([]api.UserTraffic, 0, len(b.pendingTraffic))
+	for uid, t := range b.pendingTraffic {
+		userTraffic = append(userTraffic, api.UserTraffic{
+			UID:      uid,
+			Upload:   t[0],
+			Download: t[1],
+		})
+	}
+	b.mu.Unlock()
+
+	log.Infof("%d user traffic needs to be reported", len(userTraffic))
+	if err := b.apiClient.ReportUserTraffic(b.ctx, userTraffic); err != nil {
+		log.Errorln("server error when submitting traffic, will retry next cycle:", err)
+		return nil
+	}
+
+	b.mu.Lock()
+	b.pendingTraffic = make(map[int][2]int64)
+	b.mu.Unlock()
 	return nil
 }
 
 func (b *Builder) heartbeatMonitor() error {
-	data := make(map[int][]string)
-	err := b.apiClient.ReportNodeOnlineUsers(b.ctx, data)
-	if err != nil {
+	b.mu.RLock()
+	users := b.userList
+	tag := b.inboundTag
+	b.mu.RUnlock()
+
+	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return nil
+	}
+
+	data := make(map[int][]string, len(users))
+	for _, user := range users {
+		name := "user>>>" + buildUserEmail(tag, user.Id, user.Uuid) + ">>>online"
+		om := statsManager.GetOnlineMap(name)
+		if om == nil {
+			continue
+		}
+		var ips []string
+		om.ForEach(func(ip string, _ int64) bool {
+			ips = append(ips, ip)
+			return true
+		})
+		if len(ips) > 0 {
+			data[user.Id] = ips
+		}
+	}
+
+	if err := b.apiClient.ReportNodeOnlineUsers(b.ctx, data); err != nil {
 		log.Errorln("server error when sending heartbeat", err)
 	}
 	return nil
@@ -324,16 +356,10 @@ func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
 	downCounter := statsManager.GetCounter(downName)
 
 	if upCounter != nil {
-		up = upCounter.Value()
-		if up > 0 {
-			upCounter.Set(0)
-		}
+		up = upCounter.Set(0)
 	}
 	if downCounter != nil {
-		down = downCounter.Value()
-		if down > 0 {
-			downCounter.Set(0)
-		}
+		down = downCounter.Set(0)
 	}
 	return up, down, 0
 }

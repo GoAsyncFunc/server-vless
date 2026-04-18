@@ -103,9 +103,20 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 				}
 			}
 		}
+		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
+			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
+		}
 	}
 
 	return inboundLink, outboundLink, nil
+}
+
+func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
+	name := "user>>>" + email + ">>>online"
+	if om, _ := stats.GetOrRegisterOnlineMap(sm, name); om != nil {
+		om.AddIP(ip)
+		context.AfterFunc(ctx, func() { om.RemoveIP(ip) })
+	}
 }
 
 // Dispatch implements routing.Dispatcher.
@@ -183,6 +194,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 					Writer:  outbound.Writer,
 				}
 			}
+		}
+		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
+			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
 		}
 	}
 
