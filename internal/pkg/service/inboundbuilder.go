@@ -130,6 +130,12 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 			err = buildWSConfig(streamSetting, vlessInfo)
 		case "grpc":
 			err = buildGRPCConfig(streamSetting, vlessInfo)
+		case "xhttp":
+			err = buildXHTTPConfig(streamSetting, vlessInfo)
+		case "httpupgrade":
+			err = buildHTTPUpgradeConfig(streamSetting, vlessInfo)
+		case "kcp", "mkcp":
+			err = buildKCPConfig(streamSetting, vlessInfo)
 		}
 		if err != nil {
 			return nil, err
@@ -208,5 +214,32 @@ func buildGRPCConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode)
 		return fmt.Errorf("unmarshal grpc config error: %w", err)
 	}
 	streamSetting.GRPCSettings = grpcConfig
+	return nil
+}
+
+func buildXHTTPConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode) error {
+	xhttpConfig := new(conf.SplitHTTPConfig)
+	if err := json.Unmarshal(vlessInfo.NetworkSettings, xhttpConfig); err != nil {
+		return fmt.Errorf("unmarshal xhttp config error: %w", err)
+	}
+	streamSetting.XHTTPSettings = xhttpConfig
+	return nil
+}
+
+func buildHTTPUpgradeConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode) error {
+	huConfig := new(conf.HttpUpgradeConfig)
+	if err := json.Unmarshal(vlessInfo.NetworkSettings, huConfig); err != nil {
+		return fmt.Errorf("unmarshal httpupgrade config error: %w", err)
+	}
+	streamSetting.HTTPUPGRADESettings = huConfig
+	return nil
+}
+
+func buildKCPConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode) error {
+	kcpConfig := new(conf.KCPConfig)
+	if err := json.Unmarshal(vlessInfo.NetworkSettings, kcpConfig); err != nil {
+		return fmt.Errorf("unmarshal kcp config error: %w", err)
+	}
+	streamSetting.KCPSettings = kcpConfig
 	return nil
 }
