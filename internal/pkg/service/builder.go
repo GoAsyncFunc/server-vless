@@ -64,6 +64,9 @@ func (b *Builder) Start() error {
 	if err != nil {
 		return err
 	}
+	if len(userList) == 0 {
+		return fmt.Errorf("no valid user for this node; check v2board group/plan assignment")
+	}
 	err = b.addNewUser(userList)
 	if err != nil {
 		return err
