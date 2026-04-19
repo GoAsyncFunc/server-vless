@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime/debug"
 
+	"github.com/juju/ratelimit"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -19,6 +20,8 @@ import (
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/pipe"
+
+	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 )
 
 // DefaultDispatcher is a default implementation of Dispatcher.
@@ -86,6 +89,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 
 	if user != nil && len(user.Email) > 0 {
 		p := d.policy.ForLevel(user.Level)
+		// Per-user speed limit shared across uplink + downlink.
+		bucket := limiter.Bucket(user.Email)
 		if p.Stats.UserUplink {
 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
 			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
@@ -103,6 +108,10 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 					Writer:  outboundLink.Writer,
 				}
 			}
+		}
+		if bucket != nil {
+			inboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: inboundLink.Writer}
+			outboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outboundLink.Writer}
 		}
 		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
 			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
@@ -183,6 +192,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 
 	if user != nil && len(user.Email) > 0 {
 		p := d.policy.ForLevel(user.Level)
+		bucket := limiter.Bucket(user.Email)
 		if p.Stats.UserUplink {
 			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
 			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
@@ -202,6 +212,10 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 					Writer:  outbound.Writer,
 				}
 			}
+		}
+		if bucket != nil {
+			outbound.Reader = &RateLimitedReader{Bucket: bucket, Reader: outbound.Reader}
+			outbound.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outbound.Writer}
 		}
 		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
 			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
@@ -312,5 +326,48 @@ func (r *SizeStatReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 }
 
 func (r *SizeStatReader) Interrupt() {
+	common.Interrupt(r.Reader)
+}
+
+// RateLimitedWriter wraps a buf.Writer with a token-bucket cap. Each byte
+// written consumes one token. When the bucket is empty the call blocks
+// (via bucket.Wait) until enough tokens refill, throttling the connection.
+type RateLimitedWriter struct {
+	Bucket *ratelimit.Bucket
+	Writer buf.Writer
+}
+
+func (w *RateLimitedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	if n := int64(mb.Len()); n > 0 {
+		w.Bucket.Wait(n)
+	}
+	return w.Writer.WriteMultiBuffer(mb)
+}
+
+func (w *RateLimitedWriter) Close() error {
+	return common.Close(w.Writer)
+}
+
+func (w *RateLimitedWriter) Interrupt() {
+	common.Interrupt(w.Writer)
+}
+
+// RateLimitedReader wraps a buf.Reader so the reading side also throttles.
+// Used on DispatchLink's outbound.Reader (which delivers uplink bytes to
+// the outbound handler).
+type RateLimitedReader struct {
+	Bucket *ratelimit.Bucket
+	Reader buf.Reader
+}
+
+func (r *RateLimitedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	mb, err := r.Reader.ReadMultiBuffer()
+	if n := int64(mb.Len()); n > 0 {
+		r.Bucket.Wait(n)
+	}
+	return mb, err
+}
+
+func (r *RateLimitedReader) Interrupt() {
 	common.Interrupt(r.Reader)
 }

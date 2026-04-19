@@ -15,6 +15,7 @@ import (
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/proxy"
 
+	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 )
 
@@ -141,6 +142,15 @@ func (b *Builder) Close() error {
 	if b.heartbeatMonitorPeriodic != nil {
 		b.heartbeatMonitorPeriodic.Close()
 	}
+	// Drop rate-limit buckets so the global registry doesn't keep stale
+	// entries across restarts in long-lived embedded scenarios.
+	b.mu.RLock()
+	tag := b.inboundTag
+	users := b.userList
+	b.mu.RUnlock()
+	for _, u := range users {
+		limiter.Remove(buildUserEmail(tag, u.Id, u.Uuid))
+	}
 	return nil
 }
 
@@ -187,6 +197,11 @@ func (b *Builder) fetchUsersMonitor() error {
 		log.Infof("%d user deleted, %d user added", len(deleted), len(added))
 	}
 	b.userList = newUserList
+	// Refresh per-user speed limits so SpeedLimit changes on existing users
+	// (same ID+UUID) are picked up. Set() is a no-op when unchanged.
+	for _, u := range newUserList {
+		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
+	}
 	return nil
 }
 
@@ -400,8 +415,10 @@ func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
 }
 
 // unregisterUserStats removes per-user counter and online map entries from the
-// stats manager, so deleted users (or old-tag entries after reload) don't leak.
+// stats manager and drops the user's rate-limit bucket. Used both when a user
+// is deleted and when the inbound tag changes (old-email entries leak).
 func (b *Builder) unregisterUserStats(email string) {
+	limiter.Remove(email)
 	sm, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
 	if !ok {
 		return
@@ -421,6 +438,11 @@ func (b *Builder) addNewUser(userInfo []api.UserInfo) error {
 	users := buildUser(b.inboundTag, userInfo, nodeFlow)
 	if len(users) == 0 {
 		return nil
+	}
+	// Register per-user speed limits (mbps=0 is treated as "no limit" and
+	// quietly cleared).
+	for _, u := range userInfo {
+		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
 	}
 	return b.addUsers(users, b.inboundTag)
 }
