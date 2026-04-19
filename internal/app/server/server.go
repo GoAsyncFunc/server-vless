@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 type Config struct {
 	LogLevel   string
 	DNSServers string // comma-separated
+	Version    string // set from main, used in startup banner
 }
 
 const (
@@ -170,7 +172,7 @@ func (s *Server) Start() error {
 	}
 
 	success = true
-	log.Infof("Server started")
+	printStartupBanner(s.config.Version, nodeConfig, len(s.service.Users()))
 	return nil
 }
 
@@ -388,6 +390,28 @@ func buildRouterConfig(rules api.Rules) (*router.Config, error) {
 
 // closeTimeout caps the total wait when shutting down xray core.
 const closeTimeout = 10 * time.Second
+
+// printStartupBanner writes a one-line startup summary to stderr via fmt so it
+// shows up in docker logs / journald regardless of --log_mode.
+func printStartupBanner(version string, node *api.NodeInfo, userCount int) {
+	security := "none"
+	switch node.Security {
+	case api.Tls:
+		security = "tls"
+	case api.Reality:
+		security = "reality"
+	}
+	network := "tcp"
+	port := 0
+	if node.Vless != nil {
+		if node.Vless.Network != "" {
+			network = node.Vless.Network
+		}
+		port = node.Vless.ServerPort
+	}
+	fmt.Fprintf(os.Stderr, "vless-node %s (xray %s) started: node=%d :%d %s/%s users=%d\n",
+		version, core.Version(), node.Id, port, network, security, userCount)
+}
 
 func (s *Server) Close() {
 	s.mu.Lock()

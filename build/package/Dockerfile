@@ -20,8 +20,4 @@ RUN apk --update --no-cache add tzdata ca-certificates \
 
 COPY --from=builder /app/vless-node /usr/local/bin
 
-# Default log level inside containers is info so `docker logs` shows startup /
-# user-sync activity. Override with `-e LOG_LEVEL=error` if you want silence.
-ENV LOG_LEVEL=info
-
 ENTRYPOINT ["vless-node"]

@@ -166,6 +166,7 @@ func main() {
 			// Ensure NodeType is set properly
 			apiConfig.NodeType = api.Vless
 			config.DNSServers = dnsServers
+			config.Version = Version
 
 			serv, err := server.New(&config, &apiConfig, &serviceConfig)
 			if err != nil {

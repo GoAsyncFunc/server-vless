@@ -144,6 +144,15 @@ func (b *Builder) Close() error {
 	return nil
 }
 
+// Users returns a snapshot of the current user list. Safe for concurrent use.
+func (b *Builder) Users() []api.UserInfo {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]api.UserInfo, len(b.userList))
+	copy(out, b.userList)
+	return out
+}
+
 func (b *Builder) fetchUsersMonitor() error {
 	newUserList, err := b.apiClient.GetUserList(b.ctx)
 	if err != nil {
