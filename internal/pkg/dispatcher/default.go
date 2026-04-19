@@ -63,7 +63,7 @@ func (*DefaultDispatcher) Start() error {
 // Close implements common.Closable.
 func (*DefaultDispatcher) Close() error { return nil }
 
-func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link, error) {
+func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *transport.Link) {
 	opt := pipe.OptionsFromContext(ctx)
 	uplinkReader, uplinkWriter := pipe.New(opt...)
 	downlinkReader, downlinkWriter := pipe.New(opt...)
@@ -109,7 +109,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		}
 	}
 
-	return inboundLink, outboundLink, nil
+	return inboundLink, outboundLink
 }
 
 func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
@@ -139,10 +139,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		ctx = session.ContextWithContent(ctx, content)
 	}
 
-	inbound, outbound, err := d.getLink(ctx)
-	if err != nil {
-		return nil, err
-	}
+	inbound, outbound := d.getLink(ctx)
 
 	// Sniffing logic omitted in custom dispatcher for simplicity.
 	// Rely on Inbound sniffing or routed directly.

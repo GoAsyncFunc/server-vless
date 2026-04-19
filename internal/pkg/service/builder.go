@@ -23,6 +23,7 @@ type Config struct {
 	FetchUsersInterval     time.Duration
 	ReportTrafficsInterval time.Duration
 	HeartbeatInterval      time.Duration
+	CheckNodeInterval      time.Duration
 	Cert                   *CertConfig
 }
 
@@ -59,6 +60,13 @@ func New(ctx context.Context, inboundTag string, instance *core.Instance, config
 }
 
 func (b *Builder) Start() error {
+	if b.config.FetchUsersInterval <= 0 {
+		return fmt.Errorf("invalid FetchUsersInterval: must be > 0, got %v", b.config.FetchUsersInterval)
+	}
+	if b.config.ReportTrafficsInterval <= 0 {
+		return fmt.Errorf("invalid ReportTrafficsInterval: must be > 0, got %v", b.config.ReportTrafficsInterval)
+	}
+
 	// Initial user fetch
 	userList, err := b.apiClient.GetUserList(b.ctx)
 	if err != nil {
@@ -81,10 +89,9 @@ func (b *Builder) Start() error {
 		Interval: b.config.ReportTrafficsInterval,
 		Execute:  b.reportTrafficsMonitor,
 	}
-	// Use same interval as fetch users for node config check, or 60s default
-	checkInterval := b.config.FetchUsersInterval
-	if checkInterval == 0 {
-		checkInterval = time.Minute
+	checkInterval := b.config.CheckNodeInterval
+	if checkInterval <= 0 {
+		checkInterval = b.config.FetchUsersInterval
 	}
 	b.checkNodeConfigMonitorPeriodic = &task.Periodic{
 		Interval: checkInterval,

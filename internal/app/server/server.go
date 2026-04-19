@@ -225,8 +225,8 @@ func buildDNSConfig(cliDNS string, raw api.RawDNS) (*dns.Config, error) {
 		return dc.Build()
 	}
 	if len(raw.DNSMap) != 0 {
-		dc := &conf.DNSConfig{Tag: "dns_inbound"}
-		servers := []any{"1.1.1.1", "localhost"}
+		dc := &conf.DNSConfig{}
+		servers := make([]any, 0, len(raw.DNSMap))
 		for _, value := range raw.DNSMap {
 			addr, _ := value["address"].(string)
 			if strings.Contains(addr, ":") && !strings.Contains(addr, "/") {
@@ -241,7 +241,7 @@ func buildDNSConfig(cliDNS string, raw api.RawDNS) (*dns.Config, error) {
 			servers = append(servers, value)
 		}
 		// DNSConfig.Servers is []*NameServerConfig; we need to go through JSON round-trip.
-		b, err := json.Marshal(map[string]any{"servers": servers, "tag": "dns_inbound"})
+		b, err := json.Marshal(map[string]any{"servers": servers})
 		if err != nil {
 			return nil, err
 		}
@@ -260,23 +260,62 @@ func dnsFromList(servers []string) (*dns.Config, error) {
 		if s == "" {
 			continue
 		}
-		ip := net.ParseIP(s)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid DNS server: %q", s)
+		ns, err := parseDNSServer(s)
+		if err != nil {
+			return nil, err
 		}
-		cfg.NameServer = append(cfg.NameServer, &dns.NameServer{
-			Address: &xnet.Endpoint{
-				Address: &xnet.IPOrDomain{
-					Address: &xnet.IPOrDomain_Ip{Ip: ip},
-				},
-				Network: xnet.Network_UDP,
-			},
-		})
+		cfg.NameServer = append(cfg.NameServer, ns)
 	}
 	if len(cfg.NameServer) == 0 {
 		return nil, fmt.Errorf("no valid DNS servers")
 	}
 	return cfg, nil
+}
+
+// parseDNSServer accepts:
+//
+//	1.1.1.1
+//	1.1.1.1:53
+//	udp://1.1.1.1
+//	udp://1.1.1.1:53
+//	tcp://1.1.1.1
+//	tcp://1.1.1.1:53
+//
+// Default scheme is UDP and default port is 53.
+func parseDNSServer(s string) (*dns.NameServer, error) {
+	network := xnet.Network_UDP
+	if strings.HasPrefix(s, "tcp://") {
+		network = xnet.Network_TCP
+		s = strings.TrimPrefix(s, "tcp://")
+	} else if strings.HasPrefix(s, "udp://") {
+		s = strings.TrimPrefix(s, "udp://")
+	}
+
+	host := s
+	var port uint16 = 53
+	if h, p, err := net.SplitHostPort(s); err == nil {
+		host = h
+		parsed, perr := strconv.ParseUint(p, 10, 16)
+		if perr != nil {
+			return nil, fmt.Errorf("invalid DNS port in %q: %w", s, perr)
+		}
+		port = uint16(parsed)
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid DNS server: %q", s)
+	}
+
+	return &dns.NameServer{
+		Address: &xnet.Endpoint{
+			Address: &xnet.IPOrDomain{
+				Address: &xnet.IPOrDomain_Ip{Ip: ip},
+			},
+			Port:    uint32(port),
+			Network: network,
+		},
+	}, nil
 }
 
 // buildRouterConfig turns v2board Rules into xray routing rules pointing to

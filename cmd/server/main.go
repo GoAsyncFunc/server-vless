@@ -110,6 +110,13 @@ func main() {
 				Required:    false,
 				Destination: &serviceConfig.HeartbeatInterval,
 			},
+			&cli.DurationFlag{
+				Name:        "check_node_interval, cni",
+				Usage:       "Node config change detection cycle. Defaults to fetch_users_interval when unset.",
+				EnvVars:     []string{"CHECK_NODE_INTERVAL"},
+				Required:    false,
+				Destination: &serviceConfig.CheckNodeInterval,
+			},
 			&cli.StringFlag{
 				Name:        "log_mode",
 				Value:       server.LogLevelError,
