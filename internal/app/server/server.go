@@ -292,16 +292,21 @@ func (s *Server) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Cancel context to stop all sub-services
 	if s.cancel != nil {
 		s.cancel()
 	}
 
 	if s.service != nil {
-		err := s.service.Close()
-		if err != nil {
-			log.Errorf("server close failed: %s", err)
+		if err := s.service.Close(); err != nil {
+			log.Errorf("service close failed: %s", err)
 		}
 	}
+
+	if s.instance != nil {
+		if err := s.instance.Close(); err != nil {
+			log.Errorf("xray core close failed: %s", err)
+		}
+	}
+
 	log.Infoln("server close")
 }

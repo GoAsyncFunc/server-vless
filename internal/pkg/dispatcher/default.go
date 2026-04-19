@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"runtime/debug"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -145,7 +146,17 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 
 	// Sniffing logic omitted in custom dispatcher for simplicity.
 	// Rely on Inbound sniffing or routed directly.
-	go d.routedDispatch(ctx, outbound, destination)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errors.LogError(ctx, "CustomDispatcher: panic in routedDispatch: ",
+					r, "\n", string(debug.Stack()))
+				common.Close(outbound.Writer)
+				common.Interrupt(outbound.Reader)
+			}
+		}()
+		d.routedDispatch(ctx, outbound, destination)
+	}()
 
 	return inbound, nil
 }
@@ -202,6 +213,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 
 	// Direct route dispatch for Link (Synchronous)
 	// Must NOT use goroutine here, otherwise the caller (Inbound) might cancel the context immediately.
+	defer func() {
+		if r := recover(); r != nil {
+			errors.LogError(ctx, "CustomDispatcher: panic in DispatchLink routedDispatch: ",
+				r, "\n", string(debug.Stack()))
+			common.Close(outbound.Writer)
+			common.Interrupt(outbound.Reader)
+		}
+	}()
 	d.routedDispatch(ctx, outbound, destination)
 	return nil
 }

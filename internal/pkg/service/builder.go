@@ -150,8 +150,10 @@ func (b *Builder) fetchUsersMonitor() error {
 	if len(deleted) > 0 {
 		deletedEmail := make([]string, len(deleted))
 		for i, u := range deleted {
-			deletedEmail[i] = buildUserEmail(b.inboundTag, u.Id, u.Uuid)
+			email := buildUserEmail(b.inboundTag, u.Id, u.Uuid)
+			deletedEmail[i] = email
 			delete(b.pendingTraffic, u.Id)
+			b.unregisterUserStats(email)
 		}
 		if err := b.removeUsers(deletedEmail, b.inboundTag); err != nil {
 			log.Errorln(err)
@@ -247,13 +249,8 @@ func (b *Builder) checkNodeConfigMonitor() error {
 
 	// 5a. Unregister old stats counters/online maps when tag changes
 	if oldTag != b.inboundTag {
-		if sm, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager); ok {
-			for _, u := range b.userList {
-				email := buildUserEmail(oldTag, u.Id, u.Uuid)
-				_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>uplink")
-				_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>downlink")
-				_ = sm.UnregisterOnlineMap("user>>>" + email + ">>>online")
-			}
+		for _, u := range b.userList {
+			b.unregisterUserStats(buildUserEmail(oldTag, u.Id, u.Uuid))
 		}
 	}
 
@@ -348,22 +345,28 @@ func (b *Builder) heartbeatMonitor() error {
 }
 
 func (b *Builder) compareUserList(newUsers, oldUsers []api.UserInfo) (deleted, added []api.UserInfo) {
-	oldUserMap := make(map[int]bool, len(oldUsers))
-	for _, user := range oldUsers {
-		oldUserMap[user.Id] = true
+	// Index old users by Id for diff; UUID change on the same Id is treated as
+	// a replacement (delete + re-add) so the in-memory Xray user gets the new UUID.
+	oldByID := make(map[int]api.UserInfo, len(oldUsers))
+	for _, u := range oldUsers {
+		oldByID[u.Id] = u
 	}
 
-	newUserMap := make(map[int]bool)
-	for _, newUser := range newUsers {
-		newUserMap[newUser.Id] = true
-		if !oldUserMap[newUser.Id] {
-			added = append(added, newUser)
+	newByID := make(map[int]api.UserInfo, len(newUsers))
+	for _, u := range newUsers {
+		newByID[u.Id] = u
+		prev, ok := oldByID[u.Id]
+		if !ok {
+			added = append(added, u)
+		} else if prev.Uuid != u.Uuid {
+			deleted = append(deleted, prev)
+			added = append(added, u)
 		}
 	}
 
-	for _, oldUser := range oldUsers {
-		if !newUserMap[oldUser.Id] {
-			deleted = append(deleted, oldUser)
+	for _, u := range oldUsers {
+		if _, ok := newByID[u.Id]; !ok {
+			deleted = append(deleted, u)
 		}
 	}
 	return deleted, added
@@ -384,6 +387,18 @@ func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
 		down = downCounter.Set(0)
 	}
 	return up, down, 0
+}
+
+// unregisterUserStats removes per-user counter and online map entries from the
+// stats manager, so deleted users (or old-tag entries after reload) don't leak.
+func (b *Builder) unregisterUserStats(email string) {
+	sm, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return
+	}
+	_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>uplink")
+	_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>downlink")
+	_ = sm.UnregisterOnlineMap("user>>>" + email + ">>>online")
 }
 
 func (b *Builder) addNewUser(userInfo []api.UserInfo) error {
