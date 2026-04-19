@@ -36,6 +36,7 @@ func main() {
 	var serviceConfig service.Config
 	var certConfig service.CertConfig
 	var extConfPath string
+	var dnsServers string
 
 	app := &cli.App{
 		Name:      Name,
@@ -125,6 +126,13 @@ func main() {
 				Destination: &config.LogLevel,
 				Required:    false,
 			},
+			&cli.StringFlag{
+				Name:        "dns",
+				Usage:       "Comma-separated DNS servers (overrides v2board routes DNS and default)",
+				EnvVars:     []string{"DNS"},
+				Destination: &dnsServers,
+				Required:    false,
+			},
 		},
 		Before: func(c *cli.Context) error {
 			log.SetFormatter(&log.TextFormatter{})
@@ -158,6 +166,7 @@ func main() {
 
 			// Ensure NodeType is set properly
 			apiConfig.NodeType = api.Vless
+			config.DNSServers = dnsServers
 
 			serv, err := server.New(&config, &apiConfig, &serviceConfig, extFileBytes)
 			if err != nil {

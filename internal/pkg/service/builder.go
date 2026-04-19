@@ -193,11 +193,17 @@ func (b *Builder) checkNodeConfigMonitor() error {
 			b.nodeInfo.Vless.Encryption == newNodeInfo.Vless.Encryption &&
 			reflect.DeepEqual(b.nodeInfo.Vless.NetworkSettings, newNodeInfo.Vless.NetworkSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Vless.TlsSettings, newNodeInfo.Vless.TlsSettings) &&
-			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) {
+			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) &&
+			reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
+			reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS) {
 			return nil // No change
 		}
 	}
 
+	// Note: Rules/RawDNS changes are detected but apply only to the inbound
+	// stream/security settings; xray-core router and DNS are configured at
+	// core.New() time. A full reload would require restarting the core
+	// instance. For now we log it and let the inbound rebuild handle it.
 	log.Infoln("Node configuration changed, reloading inbound...")
 
 	// 1. Build new inbound config
