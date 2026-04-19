@@ -132,6 +132,15 @@ func main() {
 				Destination: &dnsServers,
 				Required:    false,
 			},
+			&cli.StringFlag{
+				Name:        "domain_strategy, ds",
+				Usage:       "Freedom outbound domain strategy (AsIs|UseIP|UseIPv4|UseIPv6|UseIPv4v6)",
+				EnvVars:     []string{"DOMAIN_STRATEGY"},
+				Value:       "UseIPv4",
+				DefaultText: "UseIPv4",
+				Destination: &serviceConfig.DomainStrategy,
+				Required:    false,
+			},
 		},
 		Before: func(c *cli.Context) error {
 			log.SetFormatter(&log.TextFormatter{})

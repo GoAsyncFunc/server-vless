@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/xtls/xray-core/app/dns"
@@ -56,14 +57,32 @@ func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config) (
 	}, nil
 }
 
+// fetchInitialNodeInfo retries transient failures during startup (panel
+// temporarily unreachable, 5xx etc.). Max ~30s total: 1s, 2s, 4s, 8s, 15s.
+func fetchInitialNodeInfo(ctx context.Context, client *api.Client) (*api.NodeInfo, error) {
+	backoffs := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+	var lastErr error
+	for i, wait := range append([]time.Duration{0}, backoffs...) {
+		if wait > 0 {
+			log.Warnf("retry GetNodeInfo in %v (attempt %d): %v", wait, i, lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		info, err := client.GetNodeInfo(ctx)
+		if err == nil {
+			return info, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 func (s *Server) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if lvl, err := log.ParseLevel(s.config.LogLevel); err == nil {
-		log.SetLevel(lvl)
-	} else {
-		log.SetLevel(log.InfoLevel)
-	}
 
 	log.Infoln("server start")
 
@@ -85,8 +104,15 @@ func (s *Server) Start() error {
 			s.service = nil
 		}
 		if s.instance != nil {
-			if err := s.instance.Close(); err != nil {
-				log.Errorf("xray core cleanup after failed start: %s", err)
+			done := make(chan error, 1)
+			go func() { done <- s.instance.Close() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					log.Errorf("xray core cleanup after failed start: %s", err)
+				}
+			case <-time.After(closeTimeout):
+				log.Errorf("xray core close timed out during failed-start cleanup")
 			}
 			s.instance = nil
 		}
@@ -95,7 +121,7 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	nodeConfig, err := s.apiClient.GetNodeInfo(ctx)
+	nodeConfig, err := fetchInitialNodeInfo(ctx, s.apiClient)
 	if err != nil {
 		return fmt.Errorf("get node info error: %s", err)
 	}
@@ -158,15 +184,20 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	}
 	pbLogConfig := logConfig.Build()
 
-	blockOutbound, err := (&conf.OutboundDetourConfig{
-		Protocol: "blackhole",
-		Tag:      "block",
-	}).Build()
-	if err != nil {
-		return nil, fmt.Errorf("build block outbound: %w", err)
-	}
 	inboundConfigs := []*core.InboundHandlerConfig{inboundConfig}
-	outBoundConfigs := []*core.OutboundHandlerConfig{outboundConfig, blockOutbound}
+	outBoundConfigs := []*core.OutboundHandlerConfig{outboundConfig}
+
+	hasRules := len(nodeInfo.Rules.Regexp) > 0 || len(nodeInfo.Rules.Protocol) > 0
+	if hasRules {
+		blockOutbound, err := (&conf.OutboundDetourConfig{
+			Protocol: "blackhole",
+			Tag:      "block",
+		}).Build()
+		if err != nil {
+			return nil, fmt.Errorf("build block outbound: %w", err)
+		}
+		outBoundConfigs = append(outBoundConfigs, blockOutbound)
+	}
 
 	policyConfig := &conf.PolicyConfig{}
 	pbPolicy := &conf.Policy{
@@ -185,22 +216,26 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		return nil, fmt.Errorf("build dns config: %w", err)
 	}
 
-	pbRouteConfig, err := buildRouterConfig(nodeInfo.Rules)
-	if err != nil {
-		return nil, fmt.Errorf("build router config: %w", err)
+	appMsgs := []*serial.TypedMessage{
+		serial.ToTypedMessage(pbLogConfig),
+		serial.ToTypedMessage(pbPolicyConfig),
+		serial.ToTypedMessage(&stats.Config{}),
+		serial.ToTypedMessage(&dispatcher.Config{}),
+		serial.ToTypedMessage(&proxyman.InboundConfig{}),
+		serial.ToTypedMessage(&proxyman.OutboundConfig{}),
+		serial.ToTypedMessage(pbDnsConfig),
+	}
+
+	if hasRules {
+		pbRouteConfig, err := buildRouterConfig(nodeInfo.Rules)
+		if err != nil {
+			return nil, fmt.Errorf("build router config: %w", err)
+		}
+		appMsgs = append(appMsgs, serial.ToTypedMessage(pbRouteConfig))
 	}
 
 	pbCoreConfig := &core.Config{
-		App: []*serial.TypedMessage{
-			serial.ToTypedMessage(pbLogConfig),
-			serial.ToTypedMessage(pbPolicyConfig),
-			serial.ToTypedMessage(&stats.Config{}),
-			serial.ToTypedMessage(&dispatcher.Config{}),
-			serial.ToTypedMessage(&proxyman.InboundConfig{}),
-			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
-			serial.ToTypedMessage(pbRouteConfig),
-			serial.ToTypedMessage(pbDnsConfig),
-		},
+		App:      appMsgs,
 		Outbound: outBoundConfigs,
 		Inbound:  inboundConfigs,
 	}
@@ -351,6 +386,9 @@ func buildRouterConfig(rules api.Rules) (*router.Config, error) {
 	return rc.Build()
 }
 
+// closeTimeout caps the total wait when shutting down xray core.
+const closeTimeout = 10 * time.Second
+
 func (s *Server) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -366,8 +404,15 @@ func (s *Server) Close() {
 	}
 
 	if s.instance != nil {
-		if err := s.instance.Close(); err != nil {
-			log.Errorf("xray core close failed: %s", err)
+		done := make(chan error, 1)
+		go func() { done <- s.instance.Close() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				log.Errorf("xray core close failed: %s", err)
+			}
+		case <-time.After(closeTimeout):
+			log.Errorf("xray core close timed out after %v; giving up", closeTimeout)
 		}
 	}
 

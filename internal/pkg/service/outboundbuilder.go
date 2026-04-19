@@ -13,13 +13,20 @@ func OutboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.OutboundHand
 	outboundDetourConfig.Protocol = "freedom"
 	outboundDetourConfig.Tag = "direct"
 
-	domainStrategy := "UseIPv4"
+	domainStrategy := config.DomainStrategy
+	if domainStrategy == "" {
+		domainStrategy = "UseIPv4"
+	}
 
 	settings := map[string]interface{}{
 		"domainStrategy": domainStrategy,
 	}
-	settingsBytes, _ := json.Marshal(settings)
-	outboundDetourConfig.Settings = (*json.RawMessage)(&settingsBytes)
+	settingsBytes, err := json.Marshal(settings)
+	if err != nil {
+		return nil, err
+	}
+	raw := json.RawMessage(settingsBytes)
+	outboundDetourConfig.Settings = &raw
 
 	return outboundDetourConfig.Build()
 }

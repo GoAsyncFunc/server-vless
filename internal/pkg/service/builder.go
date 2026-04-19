@@ -24,6 +24,7 @@ type Config struct {
 	ReportTrafficsInterval time.Duration
 	HeartbeatInterval      time.Duration
 	CheckNodeInterval      time.Duration
+	DomainStrategy         string
 	Cert                   *CertConfig
 }
 

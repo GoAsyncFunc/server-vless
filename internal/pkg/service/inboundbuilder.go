@@ -17,10 +17,6 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 	}
 	vlessInfo := nodeInfo.Vless
 
-	var (
-		streamSetting *conf.StreamConfig
-	)
-
 	inboundDetourConfig := &conf.InboundDetourConfig{}
 
 	// Port
@@ -136,14 +132,20 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 		}
 		realitySettings.ServerNames = []string{vlessInfo.TlsSettings.ServerName}
 
-		// Logic adapted from V2bX to ensure fallback to SNI if Dest is empty
 		dest := vlessInfo.TlsSettings.Dest
 		if dest == "" {
 			dest = vlessInfo.TlsSettings.ServerName
 		}
+		destPort := vlessInfo.TlsSettings.ServerPort
+		if destPort == "" {
+			destPort = "443"
+		}
 
-		fullDest := dest + ":" + vlessInfo.TlsSettings.ServerPort
-		fullDestBytes, _ := json.Marshal(fullDest)
+		fullDest := dest + ":" + destPort
+		fullDestBytes, err := json.Marshal(fullDest)
+		if err != nil {
+			return nil, fmt.Errorf("marshal REALITY dest: %w", err)
+		}
 		realitySettings.Dest = json.RawMessage(fullDestBytes)
 
 		xver := vlessInfo.TlsSettings.Xver
