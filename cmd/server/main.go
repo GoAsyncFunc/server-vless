@@ -35,7 +35,6 @@ func main() {
 	var apiConfig api.Config
 	var serviceConfig service.Config
 	var certConfig service.CertConfig
-	var extConfPath string
 	var dnsServers string
 
 	app := &cli.App{
@@ -57,13 +56,6 @@ func main() {
 				EnvVars:     []string{"TOKEN"},
 				Required:    true,
 				Destination: &apiConfig.Key,
-			},
-			&cli.StringFlag{
-				Name:        "ext_conf_file",
-				Usage:       "Extended profiles for ACL and Outbounds(.yaml format)",
-				EnvVars:     []string{"EXT_CONF_FILE"},
-				Required:    false,
-				Destination: &extConfPath,
 			},
 			&cli.StringFlag{
 				Name:        "cert_file",
@@ -154,21 +146,12 @@ func main() {
 		},
 		Action: func(c *cli.Context) error {
 			serviceConfig.Cert = &certConfig
-			var extFileBytes []byte
-			if extConfPath != "" {
-				log.Infof("ext config: %s", extConfPath)
-				var err error
-				extFileBytes, err = os.ReadFile(extConfPath)
-				if err != nil {
-					return fmt.Errorf("failed to read file binary stream: %w", err)
-				}
-			}
 
 			// Ensure NodeType is set properly
 			apiConfig.NodeType = api.Vless
 			config.DNSServers = dnsServers
 
-			serv, err := server.New(&config, &apiConfig, &serviceConfig, extFileBytes)
+			serv, err := server.New(&config, &apiConfig, &serviceConfig)
 			if err != nil {
 				return fmt.Errorf("failed to create server: %w", err)
 			}

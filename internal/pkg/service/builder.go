@@ -183,12 +183,11 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		return nil
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// Check for changes
+	// Fast path: compare under read lock and bail out if nothing changed.
+	b.mu.RLock()
+	unchanged := false
 	if b.nodeInfo != nil && b.nodeInfo.Vless != nil {
-		if b.nodeInfo.Vless.ServerPort == newNodeInfo.Vless.ServerPort &&
+		unchanged = b.nodeInfo.Vless.ServerPort == newNodeInfo.Vless.ServerPort &&
 			b.nodeInfo.Vless.Flow == newNodeInfo.Vless.Flow &&
 			b.nodeInfo.Vless.Network == newNodeInfo.Vless.Network &&
 			b.nodeInfo.Vless.Tls == newNodeInfo.Vless.Tls &&
@@ -197,25 +196,23 @@ func (b *Builder) checkNodeConfigMonitor() error {
 			reflect.DeepEqual(b.nodeInfo.Vless.TlsSettings, newNodeInfo.Vless.TlsSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
-			reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS) {
-			return nil // No change
-		}
+			reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS)
+	}
+	b.mu.RUnlock()
+	if unchanged {
+		return nil
 	}
 
-	// Note: Rules/RawDNS changes are detected but apply only to the inbound
-	// stream/security settings; xray-core router and DNS are configured at
-	// core.New() time. A full reload would require restarting the core
-	// instance. For now we log it and let the inbound rebuild handle it.
 	log.Infoln("Node configuration changed, reloading inbound...")
 
-	// 1. Build new inbound config
+	// Heavy prep outside the lock: build pb config and allocate the handler.
+	// These operations only depend on b.config and newNodeInfo (both
+	// captured locally) so they are safe without holding b.mu.
 	newInboundConfig, err := InboundBuilder(b.config, newNodeInfo)
 	if err != nil {
 		log.Errorln("Failed to build new inbound config:", err)
 		return nil
 	}
-
-	// 2. Create Handler from config
 	rawHandler, err := core.CreateObject(b.instance, newInboundConfig)
 	if err != nil {
 		log.Errorln("Failed to create new inbound handler object:", err)
@@ -227,34 +224,30 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		return nil
 	}
 
-	inboundManager := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	// Hot-swap + state update under lock.
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	// 3. Remove old inbound
+	inboundManager := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
 	if err := inboundManager.RemoveHandler(b.ctx, b.inboundTag); err != nil {
 		log.Errorln("Failed to remove old inbound handler:", err)
 		return nil
 	}
-
-	// 4. Add new inbound
 	if err := inboundManager.AddHandler(b.ctx, newHandler); err != nil {
 		log.Errorln("Failed to add new inbound handler:", err)
-		// Try to restore old one? It's tricky.
 		return nil
 	}
 
-	// 5. Update state
 	oldTag := b.inboundTag
 	b.nodeInfo = newNodeInfo
 	b.inboundTag = newInboundConfig.Tag
 
-	// 5a. Unregister old stats counters/online maps when tag changes
 	if oldTag != b.inboundTag {
 		for _, u := range b.userList {
 			b.unregisterUserStats(buildUserEmail(oldTag, u.Id, u.Uuid))
 		}
 	}
 
-	// 6. Re-add current users to new inbound
 	if len(b.userList) > 0 {
 		log.Infof("Re-adding %d users to new inbound...", len(b.userList))
 		if err := b.addNewUser(b.userList); err != nil {

@@ -41,20 +41,18 @@ type Server struct {
 	serviceConfig *service.Config
 	apiClient     *api.Client
 	config        *Config
-	extConfBytes  []byte
 	service       *service.Builder
 	mu            sync.Mutex
 	ctx           context.Context
 	cancel        context.CancelFunc
 }
 
-func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config, extConfBytes []byte) (*Server, error) {
+func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config) (*Server, error) {
 	client := api.New(apiConfig)
 	return &Server{
 		config:        config,
 		apiClient:     client,
 		serviceConfig: serviceConfig,
-		extConfBytes:  extConfBytes,
 	}, nil
 }
 
@@ -72,6 +70,31 @@ func (s *Server) Start() error {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	ctx := s.ctx
 
+	// On any error after resources are allocated, clean them up so we don't
+	// leak an idle xray core or leftover goroutines. Cleared once Start fully
+	// succeeds at the end of the function.
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if s.service != nil {
+			if err := s.service.Close(); err != nil {
+				log.Errorf("service cleanup after failed start: %s", err)
+			}
+			s.service = nil
+		}
+		if s.instance != nil {
+			if err := s.instance.Close(); err != nil {
+				log.Errorf("xray core cleanup after failed start: %s", err)
+			}
+			s.instance = nil
+		}
+		if s.cancel != nil {
+			s.cancel()
+		}
+	}()
+
 	nodeConfig, err := s.apiClient.GetNodeInfo(ctx)
 	if err != nil {
 		return fmt.Errorf("get node info error: %s", err)
@@ -87,7 +110,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("build inbound config error: %s", err)
 	}
 
-	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig, nodeConfig, s.extConfBytes)
+	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig, nodeConfig)
 	if err != nil {
 		return fmt.Errorf("build outbound config error: %s", err)
 	}
@@ -120,6 +143,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("start service error: %s", err)
 	}
 
+	success = true
 	log.Infof("Server started")
 	return nil
 }

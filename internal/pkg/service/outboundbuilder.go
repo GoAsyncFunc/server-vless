@@ -8,7 +8,7 @@ import (
 	"github.com/xtls/xray-core/infra/conf"
 )
 
-func OutboundBuilder(config *Config, nodeInfo *api.NodeInfo, extConf []byte) (*core.OutboundHandlerConfig, error) {
+func OutboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.OutboundHandlerConfig, error) {
 	outboundDetourConfig := &conf.OutboundDetourConfig{}
 	outboundDetourConfig.Protocol = "freedom"
 	outboundDetourConfig.Tag = "direct"
