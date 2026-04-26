@@ -53,9 +53,16 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 	case "", "none":
 		// decryption stays "none"
 	case "mlkem768x25519plus":
-		// Format: "mlkem768x25519plus.<mode>.<ticket>[.<padding>].<private_key>"
 		enc := vlessInfo.EncryptionSettings
-		decryption = fmt.Sprintf("mlkem768x25519plus.%s.%s", enc.Mode, enc.Ticket)
+		mode := enc.Mode
+		if mode == "" {
+			mode = "native"
+		}
+		ticket := enc.Ticket
+		if ticket == "" {
+			ticket = "0s"
+		}
+		decryption = fmt.Sprintf("mlkem768x25519plus.%s.%s", mode, ticket)
 		if enc.ServerPadding != "" {
 			decryption += "." + enc.ServerPadding
 		}
@@ -114,6 +121,9 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 	tlsSettings := new(conf.TLSConfig)
 	switch nodeInfo.Security {
 	case 1: // TLS
+		if config == nil || config.Cert == nil {
+			return nil, fmt.Errorf("tls cert config is required")
+		}
 		streamSetting.Security = "tls"
 		tlsSettings.Certs = []*conf.TLSCertConfig{
 			{

@@ -186,11 +186,17 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	}
 	pbLogConfig := logConfig.Build()
 
+	routeConfig, err := buildRouteConfig(nodeInfo.Routes, nodeInfo.Rules)
+	if err != nil {
+		return nil, err
+	}
+
 	inboundConfigs := []*core.InboundHandlerConfig{inboundConfig}
 	outBoundConfigs := []*core.OutboundHandlerConfig{outboundConfig}
-
-	hasRules := len(nodeInfo.Rules.Regexp) > 0 || len(nodeInfo.Rules.Protocol) > 0
-	if hasRules {
+	if routeConfig.defaultOutbound != nil {
+		outBoundConfigs[0] = routeConfig.defaultOutbound
+	}
+	if routeConfig.needsBlock {
 		blockOutbound, err := (&conf.OutboundDetourConfig{
 			Protocol: "blackhole",
 			Tag:      "block",
@@ -200,6 +206,7 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		}
 		outBoundConfigs = append(outBoundConfigs, blockOutbound)
 	}
+	outBoundConfigs = append(outBoundConfigs, routeConfig.outbounds...)
 
 	policyConfig := &conf.PolicyConfig{}
 	pbPolicy := &conf.Policy{
@@ -228,12 +235,8 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		serial.ToTypedMessage(pbDnsConfig),
 	}
 
-	if hasRules {
-		pbRouteConfig, err := buildRouterConfig(nodeInfo.Rules)
-		if err != nil {
-			return nil, fmt.Errorf("build router config: %w", err)
-		}
-		appMsgs = append(appMsgs, serial.ToTypedMessage(pbRouteConfig))
+	if routeConfig.router != nil {
+		appMsgs = append(appMsgs, serial.ToTypedMessage(routeConfig.router))
 	}
 
 	pbCoreConfig := &core.Config{
@@ -355,37 +358,155 @@ func parseDNSServer(s string) (*dns.NameServer, error) {
 	}, nil
 }
 
-// buildRouterConfig turns v2board Rules into xray routing rules pointing to
-// the "block" blackhole outbound.
-func buildRouterConfig(rules api.Rules) (*router.Config, error) {
+type routeBuildResult struct {
+	router          *router.Config
+	outbounds       []*core.OutboundHandlerConfig
+	needsBlock      bool
+	defaultOutbound *core.OutboundHandlerConfig
+}
+
+func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, error) {
+	result := &routeBuildResult{}
 	rc := &conf.RouterConfig{}
-	for _, re := range rules.Regexp {
-		re = strings.TrimSpace(re)
-		if re == "" {
+	seenTags := map[string]struct{}{"direct": {}, "block": {}}
+
+	addRule := func(field string, values []string, outboundTag string) error {
+		if len(values) == 0 {
+			return nil
+		}
+		rule := map[string]any{
+			"type":        "field",
+			field:         values,
+			"outboundTag": outboundTag,
+		}
+		if field == "port" {
+			rule[field] = strings.Join(values, ",")
+		}
+		raw, err := json.Marshal(rule)
+		if err != nil {
+			return err
+		}
+		rc.RuleList = append(rc.RuleList, raw)
+		return nil
+	}
+
+	if len(routes) == 0 {
+		for _, re := range legacy.Regexp {
+			re = strings.TrimSpace(re)
+			if re == "" {
+				continue
+			}
+			if err := addRule("domain", []string{"regexp:" + re}, "block"); err != nil {
+				return nil, err
+			}
+			result.needsBlock = true
+		}
+		if protocols := api.TrimRouteValues(legacy.Protocol); len(protocols) > 0 {
+			if err := addRule("protocol", protocols, "block"); err != nil {
+				return nil, err
+			}
+			result.needsBlock = true
+		}
+	}
+
+	for _, route := range routes {
+		matches := route.Matches()
+		switch route.Action {
+		case api.RouteActionBlock:
+			domains, protocols := api.SplitBlockRouteMatches(matches)
+			if err := addRule("domain", domains, "block"); err != nil {
+				return nil, err
+			}
+			if err := addRule("protocol", protocols, "block"); err != nil {
+				return nil, err
+			}
+			if len(matches) > 0 {
+				result.needsBlock = true
+			}
+		case api.RouteActionBlockIP:
+			if err := addRule("ip", matches, "block"); err != nil {
+				return nil, err
+			}
+			if len(matches) > 0 {
+				result.needsBlock = true
+			}
+		case api.RouteActionBlockPort:
+			if err := addRule("port", matches, "block"); err != nil {
+				return nil, err
+			}
+			if len(matches) > 0 {
+				result.needsBlock = true
+			}
+		case api.RouteActionProtocol:
+			if err := addRule("protocol", matches, "block"); err != nil {
+				return nil, err
+			}
+			if len(matches) > 0 {
+				result.needsBlock = true
+			}
+		case api.RouteActionDNS:
 			continue
+		case api.RouteActionRoute, api.RouteActionRouteIP:
+			if len(matches) == 0 {
+				continue
+			}
+			outbound, tag, err := buildRouteOutbound(route, seenTags)
+			if err != nil {
+				return nil, err
+			}
+			seenTags[tag] = struct{}{}
+			result.outbounds = append(result.outbounds, outbound)
+			field := "domain"
+			if route.Action == api.RouteActionRouteIP {
+				field = "ip"
+			}
+			if err := addRule(field, matches, tag); err != nil {
+				return nil, err
+			}
+		case api.RouteActionDefaultOut:
+			outbound, tag, err := buildRouteOutbound(route, seenTags)
+			if err != nil {
+				return nil, err
+			}
+			if result.defaultOutbound != nil {
+				delete(seenTags, result.defaultOutbound.Tag)
+			}
+			seenTags[tag] = struct{}{}
+			result.defaultOutbound = outbound
+		default:
+			log.Warnf("skip unsupported route action %q", route.Action)
 		}
-		raw, err := json.Marshal(map[string]any{
-			"type":        "field",
-			"domain":      []string{"regexp:" + re},
-			"outboundTag": "block",
-		})
+	}
+
+	if len(rc.RuleList) > 0 {
+		routerConfig, err := rc.Build()
 		if err != nil {
 			return nil, err
 		}
-		rc.RuleList = append(rc.RuleList, raw)
+		result.router = routerConfig
 	}
-	if len(rules.Protocol) > 0 {
-		raw, err := json.Marshal(map[string]any{
-			"type":        "field",
-			"protocol":    rules.Protocol,
-			"outboundTag": "block",
-		})
-		if err != nil {
-			return nil, err
-		}
-		rc.RuleList = append(rc.RuleList, raw)
+	return result, nil
+}
+
+func buildRouteOutbound(route api.Route, seenTags map[string]struct{}) (*core.OutboundHandlerConfig, string, error) {
+	if strings.TrimSpace(route.ActionValue) == "" {
+		return nil, "", fmt.Errorf("route %d %s action_value is required", route.Id, route.Action)
 	}
-	return rc.Build()
+	var outbound conf.OutboundDetourConfig
+	if err := json.Unmarshal([]byte(route.ActionValue), &outbound); err != nil {
+		return nil, "", fmt.Errorf("parse route %d outbound: %w", route.Id, err)
+	}
+	if outbound.Tag == "" {
+		outbound.Tag = fmt.Sprintf("route_%d", route.Id)
+	}
+	if _, ok := seenTags[outbound.Tag]; ok {
+		return nil, "", fmt.Errorf("route %d outbound tag %q conflicts with existing outbound", route.Id, outbound.Tag)
+	}
+	built, err := outbound.Build()
+	if err != nil {
+		return nil, "", fmt.Errorf("build route %d outbound: %w", route.Id, err)
+	}
+	return built, outbound.Tag, nil
 }
 
 // closeTimeout caps the total wait when shutting down xray core.

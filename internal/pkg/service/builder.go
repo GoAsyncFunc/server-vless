@@ -227,6 +227,7 @@ func (b *Builder) checkNodeConfigMonitor() error {
 			reflect.DeepEqual(b.nodeInfo.Vless.NetworkSettings, newNodeInfo.Vless.NetworkSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Vless.TlsSettings, newNodeInfo.Vless.TlsSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) &&
+			reflect.DeepEqual(b.nodeInfo.Routes, newNodeInfo.Routes) &&
 			reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
 			reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS)
 	}
@@ -260,7 +261,11 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	inboundManager := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	inboundManager, ok := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	if !ok {
+		log.Errorln("Inbound manager feature is unavailable")
+		return nil
+	}
 	if err := inboundManager.RemoveHandler(b.ctx, b.inboundTag); err != nil {
 		log.Errorln("Failed to remove old inbound handler:", err)
 		return nil
@@ -293,21 +298,28 @@ func (b *Builder) checkNodeConfigMonitor() error {
 
 func (b *Builder) reportTrafficsMonitor() error {
 	b.mu.Lock()
-	users := b.userList
+	users := make([]api.UserInfo, len(b.userList))
+	copy(users, b.userList)
 	tag := b.inboundTag
-	if b.pendingTraffic == nil {
-		b.pendingTraffic = make(map[int][2]int64)
-	}
+	b.mu.Unlock()
 
+	currentTraffic := make(map[int][2]int64)
 	for _, user := range users {
 		email := buildUserEmail(tag, user.Id, user.Uuid)
 		up, down, _ := b.getTraffic(email)
 		if up > 0 || down > 0 {
-			prev := b.pendingTraffic[user.Id]
-			b.pendingTraffic[user.Id] = [2]int64{prev[0] + up, prev[1] + down}
+			currentTraffic[user.Id] = [2]int64{up, down}
 		}
 	}
 
+	b.mu.Lock()
+	if b.pendingTraffic == nil {
+		b.pendingTraffic = make(map[int][2]int64)
+	}
+	for uid, t := range currentTraffic {
+		prev := b.pendingTraffic[uid]
+		b.pendingTraffic[uid] = [2]int64{prev[0] + t[0], prev[1] + t[1]}
+	}
 	if len(b.pendingTraffic) == 0 {
 		b.mu.Unlock()
 		return nil
@@ -330,14 +342,24 @@ func (b *Builder) reportTrafficsMonitor() error {
 	}
 
 	b.mu.Lock()
-	b.pendingTraffic = make(map[int][2]int64)
+	for _, t := range userTraffic {
+		pending := b.pendingTraffic[t.UID]
+		pending[0] -= t.Upload
+		pending[1] -= t.Download
+		if pending[0] <= 0 && pending[1] <= 0 {
+			delete(b.pendingTraffic, t.UID)
+		} else {
+			b.pendingTraffic[t.UID] = pending
+		}
+	}
 	b.mu.Unlock()
 	return nil
 }
 
 func (b *Builder) heartbeatMonitor() error {
 	b.mu.RLock()
-	users := b.userList
+	users := make([]api.UserInfo, len(b.userList))
+	copy(users, b.userList)
 	tag := b.inboundTag
 	b.mu.RUnlock()
 
@@ -401,7 +423,10 @@ func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
 	upName := "user>>>" + email + ">>>traffic>>>uplink"
 	downName := "user>>>" + email + ">>>traffic>>>downlink"
 
-	statsManager := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
+	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return 0, 0, 0
+	}
 	upCounter := statsManager.GetCounter(upName)
 	downCounter := statsManager.GetCounter(downName)
 
@@ -448,7 +473,10 @@ func (b *Builder) addNewUser(userInfo []api.UserInfo) error {
 }
 
 func (b *Builder) addUsers(users []*protocol.User, tag string) error {
-	inboundManager := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	inboundManager, ok := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	if !ok {
+		return fmt.Errorf("inbound manager feature is unavailable")
+	}
 	handler, err := inboundManager.GetHandler(b.ctx, tag)
 	if err != nil {
 		return fmt.Errorf("failed to get inbound handler: %s", err)
@@ -478,7 +506,10 @@ func (b *Builder) addUsers(users []*protocol.User, tag string) error {
 }
 
 func (b *Builder) removeUsers(users []string, tag string) error {
-	inboundManager := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	inboundManager, ok := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
+	if !ok {
+		return fmt.Errorf("inbound manager feature is unavailable")
+	}
 	handler, err := inboundManager.GetHandler(b.ctx, tag)
 	if err != nil {
 		return fmt.Errorf("failed to get inbound handler: %s", err)

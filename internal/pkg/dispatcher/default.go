@@ -81,44 +81,74 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		Writer: downlinkWriter,
 	}
 
-	sessionInbound := session.InboundFromContext(ctx)
-	var user *protocol.MemoryUser
-	if sessionInbound != nil {
-		user = sessionInbound.User
-	}
-
-	if user != nil && len(user.Email) > 0 {
-		p := d.policy.ForLevel(user.Level)
-		// Per-user speed limit shared across uplink + downlink.
-		bucket := limiter.Bucket(user.Email)
-		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
-				inboundLink.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  inboundLink.Writer,
-				}
-			}
-		}
-		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
-				outboundLink.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  outboundLink.Writer,
-				}
-			}
-		}
-		if bucket != nil {
-			inboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: inboundLink.Writer}
-			outboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outboundLink.Writer}
-		}
-		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
-			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
-		}
-	}
+	d.wrapDispatchLinks(ctx, inboundLink, outboundLink)
 
 	return inboundLink, outboundLink
+}
+
+func userFromContext(ctx context.Context) (*session.Inbound, *protocol.MemoryUser) {
+	sessionInbound := session.InboundFromContext(ctx)
+	if sessionInbound == nil {
+		return nil, nil
+	}
+	return sessionInbound, sessionInbound.User
+}
+
+func (d *DefaultDispatcher) wrapDispatchLinks(ctx context.Context, inboundLink, outboundLink *transport.Link) {
+	sessionInbound, user := userFromContext(ctx)
+	if user == nil || user.Email == "" {
+		return
+	}
+
+	p := d.policy.ForLevel(user.Level)
+	bucket := limiter.Bucket(user.Email)
+	if c := d.userCounter(user.Email, p.Stats.UserUplink, "uplink"); c != nil {
+		inboundLink.Writer = &SizeStatWriter{Counter: c, Writer: inboundLink.Writer}
+	}
+	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
+		outboundLink.Writer = &SizeStatWriter{Counter: c, Writer: outboundLink.Writer}
+	}
+	if bucket != nil {
+		inboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: inboundLink.Writer}
+		outboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outboundLink.Writer}
+	}
+	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
+}
+
+func (d *DefaultDispatcher) wrapDispatchLink(ctx context.Context, outbound *transport.Link) {
+	sessionInbound, user := userFromContext(ctx)
+	if user == nil || user.Email == "" {
+		return
+	}
+
+	p := d.policy.ForLevel(user.Level)
+	bucket := limiter.Bucket(user.Email)
+	if c := d.userCounter(user.Email, p.Stats.UserUplink, "uplink"); c != nil {
+		outbound.Reader = &SizeStatReader{Counter: c, Reader: outbound.Reader}
+	}
+	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
+		outbound.Writer = &SizeStatWriter{Counter: c, Writer: outbound.Writer}
+	}
+	if bucket != nil {
+		outbound.Reader = &RateLimitedReader{Bucket: bucket, Reader: outbound.Reader}
+		outbound.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outbound.Writer}
+	}
+	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
+}
+
+func (d *DefaultDispatcher) userCounter(email string, enabled bool, direction string) stats.Counter {
+	if !enabled {
+		return nil
+	}
+	name := "user>>>" + email + ">>>traffic>>>" + direction
+	c, _ := stats.GetOrRegisterCounter(d.stats, name)
+	return c
+}
+
+func (d *DefaultDispatcher) trackUserOnline(ctx context.Context, sessionInbound *session.Inbound, email string, enabled bool) {
+	if enabled && sessionInbound.Source.Address != nil {
+		trackOnlineIP(ctx, d.stats, email, sessionInbound.Source.Address.String())
+	}
 }
 
 func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
@@ -183,44 +213,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	ob.OriginalTarget = destination
 	ob.Target = destination
 
-	// User Stats Logic for DispatchLink
-	sessionInbound := session.InboundFromContext(ctx)
-	var user *protocol.MemoryUser
-	if sessionInbound != nil {
-		user = sessionInbound.User
-	}
-
-	if user != nil && len(user.Email) > 0 {
-		p := d.policy.ForLevel(user.Level)
-		bucket := limiter.Bucket(user.Email)
-		if p.Stats.UserUplink {
-			name := "user>>>" + user.Email + ">>>traffic>>>uplink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
-				// Outbound Reader is Uplink (from User)
-				outbound.Reader = &SizeStatReader{
-					Counter: c,
-					Reader:  outbound.Reader,
-				}
-			}
-		}
-		if p.Stats.UserDownlink {
-			name := "user>>>" + user.Email + ">>>traffic>>>downlink"
-			if c, _ := stats.GetOrRegisterCounter(d.stats, name); c != nil {
-				// Outbound Writer is Downlink (to User)
-				outbound.Writer = &SizeStatWriter{
-					Counter: c,
-					Writer:  outbound.Writer,
-				}
-			}
-		}
-		if bucket != nil {
-			outbound.Reader = &RateLimitedReader{Bucket: bucket, Reader: outbound.Reader}
-			outbound.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outbound.Writer}
-		}
-		if p.Stats.UserOnline && sessionInbound.Source.Address != nil {
-			trackOnlineIP(ctx, d.stats, user.Email, sessionInbound.Source.Address.String())
-		}
-	}
+	d.wrapDispatchLink(ctx, outbound)
 
 	// Direct route dispatch for Link (Synchronous)
 	// Must NOT use goroutine here, otherwise the caller (Inbound) might cancel the context immediately.

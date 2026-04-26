@@ -134,10 +134,10 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:        "domain_strategy, ds",
-				Usage:       "Freedom outbound domain strategy (AsIs|UseIP|UseIPv4|UseIPv6|UseIPv4v6)",
+				Usage:       "Freedom outbound domain strategy (AsIs|UseIP|UseIPv4v6|UseIPv6|UseIPv4v6v6)",
 				EnvVars:     []string{"DOMAIN_STRATEGY"},
-				Value:       "UseIPv4",
-				DefaultText: "UseIPv4",
+				Value:       "UseIPv4v6",
+				DefaultText: "UseIPv4v6",
 				Destination: &serviceConfig.DomainStrategy,
 				Required:    false,
 			},

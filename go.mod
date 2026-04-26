@@ -3,7 +3,8 @@ module github.com/GoAsyncFunc/server-vless
 go 1.26
 
 require (
-	github.com/GoAsyncFunc/uniproxy v0.0.8
+	github.com/GoAsyncFunc/uniproxy v0.0.9
+	github.com/juju/ratelimit v1.0.2
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/xtls/xray-core v26.4.15+incompatible
@@ -17,10 +18,9 @@ require (
 	github.com/apernet/quic-go v0.59.1-0.20260330051153-c402ee641eb6 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
-	github.com/go-resty/resty/v2 v2.17.1 // indirect
+	github.com/go-resty/resty/v2 v2.17.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect

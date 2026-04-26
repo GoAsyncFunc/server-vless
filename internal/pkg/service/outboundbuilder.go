@@ -15,7 +15,7 @@ func OutboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.OutboundHand
 
 	domainStrategy := config.DomainStrategy
 	if domainStrategy == "" {
-		domainStrategy = "UseIPv4"
+		domainStrategy = "UseIPv4v6"
 	}
 
 	settings := map[string]interface{}{
