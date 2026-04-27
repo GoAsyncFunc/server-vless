@@ -7,11 +7,11 @@ require (
 	github.com/juju/ratelimit v1.0.2
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli/v2 v2.27.7
-	github.com/xtls/xray-core v26.4.15+incompatible
+	github.com/xtls/xray-core v1.260327.0
 	google.golang.org/protobuf v1.36.11
 )
 
-replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20260415235634-c5edc122b70e
+replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20260425231635-b4f08981becb
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
@@ -24,9 +24,10 @@ require (
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
-	github.com/pires/go-proxyproto v0.11.0 // indirect
+	github.com/pires/go-proxyproto v0.12.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
+	github.com/robfig/cron/v3 v3.0.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sagernet/sing v0.7.14 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.9 // indirect
@@ -46,7 +47,7 @@ require (
 	golang.org/x/tools v0.43.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
-	golang.zx2c4.com/wireguard/windows v0.6.1 // indirect
+	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
 	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect

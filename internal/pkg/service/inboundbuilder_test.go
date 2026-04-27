@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
+	"github.com/xtls/xray-core/app/proxyman"
 	vlessinbound "github.com/xtls/xray-core/proxy/vless/inbound"
 )
 
@@ -56,6 +57,47 @@ func TestInboundBuilderDefaultsMLKEMSettingsFromV2Board(t *testing.T) {
 	}
 	if config.SecondsFrom != 0 {
 		t.Fatalf("seconds_from = %d, want 0", config.SecondsFrom)
+	}
+}
+
+func TestInboundBuilderSniffingToggle(t *testing.T) {
+	node := &api.NodeInfo{
+		Vless: &api.VlessNode{
+			CommonNode: api.CommonNode{ServerPort: 443},
+			Network:    "tcp",
+		},
+	}
+
+	inbound, err := InboundBuilder(&Config{}, node)
+	if err != nil {
+		t.Fatalf("InboundBuilder returned error: %v", err)
+	}
+	receiverMessage, err := inbound.ReceiverSettings.GetInstance()
+	if err != nil {
+		t.Fatalf("GetInstance returned error: %v", err)
+	}
+	receiver, ok := receiverMessage.(*proxyman.ReceiverConfig)
+	if !ok {
+		t.Fatalf("receiver settings type = %T, want *proxyman.ReceiverConfig", receiverMessage)
+	}
+	if receiver.SniffingSettings == nil || !receiver.SniffingSettings.Enabled {
+		t.Fatal("expected sniffing enabled by default")
+	}
+
+	inbound, err = InboundBuilder(&Config{DisableSniffing: true}, node)
+	if err != nil {
+		t.Fatalf("InboundBuilder returned error: %v", err)
+	}
+	receiverMessage, err = inbound.ReceiverSettings.GetInstance()
+	if err != nil {
+		t.Fatalf("GetInstance returned error: %v", err)
+	}
+	receiver, ok = receiverMessage.(*proxyman.ReceiverConfig)
+	if !ok {
+		t.Fatalf("receiver settings type = %T, want *proxyman.ReceiverConfig", receiverMessage)
+	}
+	if receiver.SniffingSettings != nil && receiver.SniffingSettings.Enabled {
+		t.Fatal("expected sniffing disabled")
 	}
 }
 

@@ -29,13 +29,15 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 	inboundDetourConfig.Tag = fmt.Sprintf("vless_%d", vlessInfo.ServerPort)
 
 	// Sniffing
-	sniffingConfig := &conf.SniffingConfig{
-		Enabled: true,
-		DestOverride: conf.StringList{
-			"http", "tls", "quic",
-		},
+	if !config.DisableSniffing {
+		sniffingConfig := &conf.SniffingConfig{
+			Enabled: true,
+			DestOverride: conf.StringList{
+				"http", "tls", "quic",
+			},
+		}
+		inboundDetourConfig.SniffingConfig = sniffingConfig
 	}
-	inboundDetourConfig.SniffingConfig = sniffingConfig
 
 	// Protocol
 	inboundDetourConfig.Protocol = api.Vless

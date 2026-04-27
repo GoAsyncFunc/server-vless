@@ -26,6 +26,8 @@ type Config struct {
 	HeartbeatInterval      time.Duration
 	CheckNodeInterval      time.Duration
 	DomainStrategy         string
+	DisableSniffing        bool
+	AllowPrivateOutbound   bool
 	Cert                   *CertConfig
 }
 
@@ -36,6 +38,8 @@ type Builder struct {
 	inboundTag                     string
 	userList                       []api.UserInfo
 	pendingTraffic                 map[int][2]int64
+	trafficScanCursor              int
+	lastRuntimeConfigWarning       *api.NodeInfo
 	mu                             sync.RWMutex
 	apiClient                      *api.Client
 	fetchUsersMonitorPeriodic      *task.Periodic
@@ -45,6 +49,8 @@ type Builder struct {
 	ctx                            context.Context
 	cancel                         context.CancelFunc
 }
+
+const trafficScanBatchSize = 2048
 
 func New(ctx context.Context, inboundTag string, instance *core.Instance, config *Config, nodeInfo *api.NodeInfo,
 	apiClient *api.Client,
@@ -179,7 +185,8 @@ func (b *Builder) fetchUsersMonitor() error {
 		for i, u := range deleted {
 			email := buildUserEmail(b.inboundTag, u.Id, u.Uuid)
 			deletedEmail[i] = email
-			delete(b.pendingTraffic, u.Id)
+			up, down, _ := b.getTraffic(email)
+			b.addPendingTrafficLocked(u.Id, up, down)
 			b.unregisterUserStats(email)
 		}
 		if err := b.removeUsers(deletedEmail, b.inboundTag); err != nil {
@@ -205,6 +212,28 @@ func (b *Builder) fetchUsersMonitor() error {
 	return nil
 }
 
+func (b *Builder) runtimeConfigUnchanged(newNodeInfo *api.NodeInfo) bool {
+	if b.nodeInfo == nil || newNodeInfo == nil {
+		return true
+	}
+	return reflect.DeepEqual(b.nodeInfo.Routes, newNodeInfo.Routes) &&
+		reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
+		reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS)
+}
+
+func (b *Builder) runtimeWarningAlreadyLogged(newNodeInfo *api.NodeInfo) bool {
+	if b.lastRuntimeConfigWarning == nil || newNodeInfo == nil {
+		return false
+	}
+	return reflect.DeepEqual(b.lastRuntimeConfigWarning.Routes, newNodeInfo.Routes) &&
+		reflect.DeepEqual(b.lastRuntimeConfigWarning.Rules, newNodeInfo.Rules) &&
+		reflect.DeepEqual(b.lastRuntimeConfigWarning.RawDNS, newNodeInfo.RawDNS)
+}
+
+func (b *Builder) resetRuntimeConfigWarningLocked() {
+	b.lastRuntimeConfigWarning = nil
+}
+
 func (b *Builder) checkNodeConfigMonitor() error {
 	newNodeInfo, err := b.apiClient.GetNodeInfo(b.ctx)
 	if err != nil {
@@ -217,30 +246,52 @@ func (b *Builder) checkNodeConfigMonitor() error {
 
 	// Fast path: compare under read lock and bail out if nothing changed.
 	b.mu.RLock()
-	unchanged := false
+	inboundUnchanged := false
+	runtimeConfigUnchanged := true
 	if b.nodeInfo != nil && b.nodeInfo.Vless != nil {
-		unchanged = b.nodeInfo.Vless.ServerPort == newNodeInfo.Vless.ServerPort &&
+		inboundUnchanged = b.nodeInfo.Vless.ServerPort == newNodeInfo.Vless.ServerPort &&
 			b.nodeInfo.Vless.Flow == newNodeInfo.Vless.Flow &&
 			b.nodeInfo.Vless.Network == newNodeInfo.Vless.Network &&
 			b.nodeInfo.Vless.Tls == newNodeInfo.Vless.Tls &&
 			b.nodeInfo.Vless.Encryption == newNodeInfo.Vless.Encryption &&
 			reflect.DeepEqual(b.nodeInfo.Vless.NetworkSettings, newNodeInfo.Vless.NetworkSettings) &&
 			reflect.DeepEqual(b.nodeInfo.Vless.TlsSettings, newNodeInfo.Vless.TlsSettings) &&
-			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings) &&
-			reflect.DeepEqual(b.nodeInfo.Routes, newNodeInfo.Routes) &&
-			reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
-			reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS)
+			reflect.DeepEqual(b.nodeInfo.Vless.EncryptionSettings, newNodeInfo.Vless.EncryptionSettings)
+		runtimeConfigUnchanged = b.runtimeConfigUnchanged(newNodeInfo)
 	}
 	b.mu.RUnlock()
-	if unchanged {
+	if runtimeConfigUnchanged {
+		b.mu.Lock()
+		b.resetRuntimeConfigWarningLocked()
+		b.mu.Unlock()
+	}
+	if inboundUnchanged && runtimeConfigUnchanged {
+		return nil
+	}
+	if !runtimeConfigUnchanged {
+		b.mu.Lock()
+		shouldWarn := !b.runtimeWarningAlreadyLogged(newNodeInfo)
+		if shouldWarn {
+			b.lastRuntimeConfigWarning = newNodeInfo
+		}
+		b.mu.Unlock()
+		if shouldWarn {
+			log.Warnln("Node routing/DNS config changed; full core reload is required, restart server-vless to apply routes, DNS, and custom outbounds")
+		}
+	}
+	if inboundUnchanged {
 		return nil
 	}
 
-	log.Infoln("Node configuration changed, reloading inbound...")
+	log.Infoln("Node inbound configuration changed, reloading inbound...")
+
+	b.mu.RLock()
+	oldNodeInfo := b.nodeInfo
+	b.mu.RUnlock()
 
 	// Heavy prep outside the lock: build pb config and allocate the handler.
-	// These operations only depend on b.config and newNodeInfo (both
-	// captured locally) so they are safe without holding b.mu.
+	// These operations only depend on b.config and nodeInfo snapshots so they
+	// are safe without holding b.mu.
 	newInboundConfig, err := InboundBuilder(b.config, newNodeInfo)
 	if err != nil {
 		log.Errorln("Failed to build new inbound config:", err)
@@ -254,6 +305,22 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	newHandler, ok := rawHandler.(inbound.Handler)
 	if !ok {
 		log.Errorln("Created object is not an InboundHandler")
+		return nil
+	}
+
+	oldInboundConfig, err := InboundBuilder(b.config, oldNodeInfo)
+	if err != nil {
+		log.Errorln("Failed to build rollback inbound config:", err)
+		return nil
+	}
+	rawOldHandler, err := core.CreateObject(b.instance, oldInboundConfig)
+	if err != nil {
+		log.Errorln("Failed to create rollback inbound handler object:", err)
+		return nil
+	}
+	oldHandler, ok := rawOldHandler.(inbound.Handler)
+	if !ok {
+		log.Errorln("Created rollback object is not an InboundHandler")
 		return nil
 	}
 
@@ -272,6 +339,9 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	}
 	if err := inboundManager.AddHandler(b.ctx, newHandler); err != nil {
 		log.Errorln("Failed to add new inbound handler:", err)
+		if restoreErr := inboundManager.AddHandler(b.ctx, oldHandler); restoreErr != nil {
+			log.Errorln("Failed to restore old inbound handler after reload failure:", restoreErr)
+		}
 		return nil
 	}
 
@@ -296,11 +366,41 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	return nil
 }
 
+func (b *Builder) addPendingTrafficLocked(uid int, up, down int64) {
+	if up <= 0 && down <= 0 {
+		return
+	}
+	if b.pendingTraffic == nil {
+		b.pendingTraffic = make(map[int][2]int64)
+	}
+	prev := b.pendingTraffic[uid]
+	b.pendingTraffic[uid] = [2]int64{prev[0] + up, prev[1] + down}
+}
+
+func (b *Builder) nextTrafficScanUsersLocked(batchSize int) []api.UserInfo {
+	users := make([]api.UserInfo, 0, min(len(b.userList), batchSize))
+	if len(b.userList) == 0 {
+		return users
+	}
+	if b.trafficScanCursor >= len(b.userList) {
+		b.trafficScanCursor = 0
+	}
+	end := b.trafficScanCursor + batchSize
+	if end > len(b.userList) {
+		end = len(b.userList)
+	}
+	users = append(users, b.userList[b.trafficScanCursor:end]...)
+	b.trafficScanCursor = end
+	if b.trafficScanCursor >= len(b.userList) {
+		b.trafficScanCursor = 0
+	}
+	return users
+}
+
 func (b *Builder) reportTrafficsMonitor() error {
 	b.mu.Lock()
-	users := make([]api.UserInfo, len(b.userList))
-	copy(users, b.userList)
 	tag := b.inboundTag
+	users := b.nextTrafficScanUsersLocked(trafficScanBatchSize)
 	b.mu.Unlock()
 
 	currentTraffic := make(map[int][2]int64)
@@ -313,12 +413,8 @@ func (b *Builder) reportTrafficsMonitor() error {
 	}
 
 	b.mu.Lock()
-	if b.pendingTraffic == nil {
-		b.pendingTraffic = make(map[int][2]int64)
-	}
 	for uid, t := range currentTraffic {
-		prev := b.pendingTraffic[uid]
-		b.pendingTraffic[uid] = [2]int64{prev[0] + t[0], prev[1] + t[1]}
+		b.addPendingTrafficLocked(uid, t[0], t[1])
 	}
 	if len(b.pendingTraffic) == 0 {
 		b.mu.Unlock()

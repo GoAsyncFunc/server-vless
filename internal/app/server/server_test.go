@@ -1,11 +1,33 @@
 package server
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
+	"github.com/xtls/xray-core/common/platform"
 )
+
+func TestApplyAssetDir(t *testing.T) {
+	t.Setenv(platform.AssetLocation, "")
+	if err := applyAssetDir(" /tmp/server-vless-assets "); err != nil {
+		t.Fatalf("applyAssetDir returned error: %v", err)
+	}
+	if got := os.Getenv(platform.AssetLocation); got != "/tmp/server-vless-assets" {
+		t.Fatalf("asset dir env = %q", got)
+	}
+}
+
+func TestApplyAssetDirEmptyKeepsExistingValue(t *testing.T) {
+	t.Setenv(platform.AssetLocation, "/tmp/existing-assets")
+	if err := applyAssetDir("  "); err != nil {
+		t.Fatalf("applyAssetDir returned error: %v", err)
+	}
+	if got := os.Getenv(platform.AssetLocation); got != "/tmp/existing-assets" {
+		t.Fatalf("asset dir env = %q", got)
+	}
+}
 
 func TestBuildRouteConfigBlockActions(t *testing.T) {
 	result, err := buildRouteConfig([]api.Route{

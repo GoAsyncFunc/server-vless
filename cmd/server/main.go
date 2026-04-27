@@ -133,6 +133,27 @@ func main() {
 				Required:    false,
 			},
 			&cli.StringFlag{
+				Name:        "asset-dir",
+				Usage:       "Directory containing geoip.dat and geosite.dat",
+				EnvVars:     []string{"ASSET_DIR", "SERVER_VLESS_ASSET_DIR"},
+				Destination: &config.AssetDir,
+				Required:    false,
+			},
+			&cli.BoolFlag{
+				Name:        "disable_sniffing",
+				Usage:       "Disable inbound sniffing for lower connection setup overhead when routing does not need it",
+				EnvVars:     []string{"DISABLE_SNIFFING"},
+				Destination: &serviceConfig.DisableSniffing,
+				Required:    false,
+			},
+			&cli.BoolFlag{
+				Name:        "allow-private-outbound",
+				Usage:       "Security-sensitive: allow users to reach the server's private and loopback IP destinations through the default freedom outbound",
+				EnvVars:     []string{"ALLOW_PRIVATE_OUTBOUND"},
+				Destination: &serviceConfig.AllowPrivateOutbound,
+				Required:    false,
+			},
+			&cli.StringFlag{
 				Name:        "domain_strategy, ds",
 				Usage:       "Freedom outbound domain strategy (AsIs|UseIP|UseIPv4v6|UseIPv6|UseIPv4v6v6)",
 				EnvVars:     []string{"DOMAIN_STRATEGY"},

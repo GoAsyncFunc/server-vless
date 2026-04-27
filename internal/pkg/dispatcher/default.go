@@ -3,6 +3,9 @@ package dispatcher
 import (
 	"context"
 	"runtime/debug"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/juju/ratelimit"
 	"github.com/xtls/xray-core/common"
@@ -11,6 +14,10 @@ import (
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
+	"github.com/xtls/xray-core/common/protocol/bittorrent"
+	"github.com/xtls/xray-core/common/protocol/http"
+	"github.com/xtls/xray-core/common/protocol/quic"
+	protocoltls "github.com/xtls/xray-core/common/protocol/tls"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/outbound"
@@ -23,6 +30,65 @@ import (
 
 	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 )
+
+var errSniffingTimeout = errors.New("timeout on sniffing")
+
+type cachedReader struct {
+	sync.Mutex
+	reader buf.TimeoutReader
+	cache  buf.MultiBuffer
+}
+
+func (r *cachedReader) Cache(b *buf.Buffer, deadline time.Duration) error {
+	mb, err := r.reader.ReadMultiBufferTimeout(deadline)
+	if err != nil {
+		return err
+	}
+	r.Lock()
+	if !mb.IsEmpty() {
+		r.cache, _ = buf.MergeMulti(r.cache, mb)
+	}
+	b.Clear()
+	rawBytes := b.Extend(min(r.cache.Len(), b.Cap()))
+	n := r.cache.Copy(rawBytes)
+	b.Resize(0, int32(n))
+	r.Unlock()
+	return nil
+}
+
+func (r *cachedReader) readInternal() buf.MultiBuffer {
+	r.Lock()
+	defer r.Unlock()
+	if r.cache != nil && !r.cache.IsEmpty() {
+		mb := r.cache
+		r.cache = nil
+		return mb
+	}
+	return nil
+}
+
+func (r *cachedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
+	if mb := r.readInternal(); mb != nil {
+		return mb, nil
+	}
+	return r.reader.ReadMultiBuffer()
+}
+
+func (r *cachedReader) ReadMultiBufferTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+	if mb := r.readInternal(); mb != nil {
+		return mb, nil
+	}
+	return r.reader.ReadMultiBufferTimeout(timeout)
+}
+
+func (r *cachedReader) Interrupt() {
+	r.Lock()
+	if r.cache != nil {
+		r.cache = buf.ReleaseMulti(r.cache)
+	}
+	r.Unlock()
+	common.Interrupt(r.reader)
+}
 
 // DefaultDispatcher is a default implementation of Dispatcher.
 type DefaultDispatcher struct {
@@ -159,6 +225,152 @@ func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
 	}
 }
 
+type SniffResult interface {
+	Protocol() string
+	Domain() string
+}
+
+type protocolSniffer func(context.Context, []byte) (SniffResult, error)
+
+type protocolSnifferWithNetwork struct {
+	protocolSniffer protocolSniffer
+	network         net.Network
+}
+
+type Sniffer struct {
+	sniffers []protocolSnifferWithNetwork
+}
+
+func NewSniffer() *Sniffer {
+	return &Sniffer{sniffers: []protocolSnifferWithNetwork{
+		{func(c context.Context, b []byte) (SniffResult, error) { return http.SniffHTTP(b, c) }, net.Network_TCP},
+		{func(_ context.Context, b []byte) (SniffResult, error) { return protocoltls.SniffTLS(b) }, net.Network_TCP},
+		{func(_ context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBittorrent(b) }, net.Network_TCP},
+		{func(_ context.Context, b []byte) (SniffResult, error) { return quic.SniffQUIC(b) }, net.Network_UDP},
+		{func(_ context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUTP(b) }, net.Network_UDP},
+	}}
+}
+
+var errUnknownContent = errors.New("unknown content")
+
+func (s *Sniffer) Sniff(c context.Context, payload []byte, network net.Network) (SniffResult, error) {
+	var pendingSniffers []protocolSnifferWithNetwork
+	for _, si := range s.sniffers {
+		if si.network != network {
+			continue
+		}
+		result, err := si.protocolSniffer(c, payload)
+		if err == common.ErrNoClue {
+			pendingSniffers = append(pendingSniffers, si)
+			continue
+		}
+		if err == protocol.ErrProtoNeedMoreData {
+			s.sniffers = []protocolSnifferWithNetwork{si}
+			return nil, err
+		}
+		if err == nil && result != nil {
+			return result, nil
+		}
+	}
+	if len(pendingSniffers) > 0 {
+		s.sniffers = pendingSniffers
+		return nil, common.ErrNoClue
+	}
+	return nil, errUnknownContent
+}
+
+func ensureTimeoutReader(reader buf.Reader) buf.TimeoutReader {
+	if timeoutReader, ok := reader.(buf.TimeoutReader); ok {
+		return timeoutReader
+	}
+	return &buf.TimeoutWrapperReader{Reader: reader}
+}
+
+func (d *DefaultDispatcher) shouldOverride(result SniffResult, request session.SniffingRequest, destination net.Destination) bool {
+	domain := result.Domain()
+	if domain == "" {
+		return false
+	}
+	if request.ExcludeForDomain != nil && request.ExcludeForDomain.MatchAny(strings.ToLower(domain)) {
+		return false
+	}
+	if request.ExcludeForIP != nil && destination.Address.Family().IsIP() && request.ExcludeForIP.Match(destination.Address.IP()) {
+		return false
+	}
+	protocolString := result.Protocol()
+	for _, p := range request.OverrideDestinationForProtocol {
+		if protocolString == p {
+			return true
+		}
+	}
+	return false
+}
+
+func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, network net.Network) (SniffResult, error) {
+	if metadataOnly {
+		return nil, common.ErrNoClue
+	}
+
+	payload := buf.NewWithSize(32767)
+	defer payload.Release()
+
+	sniffer := NewSniffer()
+
+	cacheDeadline := 200 * time.Millisecond
+	totalAttempt := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			start := time.Now()
+			err := cReader.Cache(payload, cacheDeadline)
+			if err != nil {
+				return nil, err
+			}
+			cacheDeadline -= time.Since(start)
+
+			if !payload.IsEmpty() {
+				result, err := sniffer.Sniff(ctx, payload.Bytes(), network)
+				switch err {
+				case common.ErrNoClue:
+					totalAttempt++
+				case protocol.ErrProtoNeedMoreData:
+				default:
+					return result, err
+				}
+			} else {
+				totalAttempt++
+			}
+			if totalAttempt >= 2 || cacheDeadline <= 0 {
+				return nil, errSniffingTimeout
+			}
+		}
+	}
+}
+
+func (d *DefaultDispatcher) sniffDestination(ctx context.Context, reader buf.Reader, destination net.Destination, ob *session.Outbound, content *session.Content) (buf.Reader, net.Destination) {
+	// This dispatcher only does payload sniffing; metadata-only/FakeDNS is intentionally not handled here.
+	sniffingRequest := content.SniffingRequest
+	if !sniffingRequest.Enabled || sniffingRequest.MetadataOnly {
+		return reader, destination
+	}
+	cReader := &cachedReader{reader: ensureTimeoutReader(reader)}
+	result, err := sniffer(ctx, cReader, false, destination.Network)
+	if err == nil {
+		content.Protocol = result.Protocol()
+	}
+	if err == nil && d.shouldOverride(result, sniffingRequest, destination) {
+		destination.Address = net.ParseAddress(result.Domain())
+		if sniffingRequest.RouteOnly {
+			ob.RouteTarget = destination
+		} else {
+			ob.Target = destination
+		}
+	}
+	return cReader, destination
+}
+
 // Dispatch implements routing.Dispatcher.
 func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destination) (*transport.Link, error) {
 	if !destination.IsValid() {
@@ -180,8 +392,6 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 
 	inbound, outbound := d.getLink(ctx)
 
-	// Sniffing logic omitted in custom dispatcher for simplicity.
-	// Rely on Inbound sniffing or routed directly.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -191,6 +401,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				common.Interrupt(outbound.Reader)
 			}
 		}()
+		outbound.Reader, destination = d.sniffDestination(ctx, outbound.Reader, destination, ob, content)
 		d.routedDispatch(ctx, outbound, destination)
 	}()
 
@@ -212,8 +423,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	ob := outbounds[len(outbounds)-1]
 	ob.OriginalTarget = destination
 	ob.Target = destination
+	content := session.ContentFromContext(ctx)
+	if content == nil {
+		content = new(session.Content)
+		ctx = session.ContextWithContent(ctx, content)
+	}
 
 	d.wrapDispatchLink(ctx, outbound)
+	outbound.Reader, destination = d.sniffDestination(ctx, outbound.Reader, destination, ob, content)
 
 	// Direct route dispatch for Link (Synchronous)
 	// Must NOT use goroutine here, otherwise the caller (Inbound) might cancel the context immediately.
@@ -230,13 +447,28 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 }
 
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
+	outbounds := session.OutboundsFromContext(ctx)
+	ob := outbounds[len(outbounds)-1]
+
 	var handler outbound.Handler
 
 	routingLink := routing_session.AsRoutingContext(ctx)
 	inTag := routingLink.GetInboundTag()
 	isPickRoute := 0
 
-	if d.router != nil {
+	if forcedOutboundTag := session.GetForcedOutboundTagFromContext(ctx); forcedOutboundTag != "" {
+		ctx = session.SetForcedOutboundTagToContext(ctx, "")
+		if h := d.ohm.GetHandler(forcedOutboundTag); h != nil {
+			isPickRoute = 1
+			errors.LogInfo(ctx, "CustomDispatcher: taking platform initialized detour [", forcedOutboundTag, "] for [", destination, "]")
+			handler = h
+		} else {
+			errors.LogError(ctx, "CustomDispatcher: non existing tag for platform initialized detour: ", forcedOutboundTag)
+			common.Close(link.Writer)
+			common.Interrupt(link.Reader)
+			return
+		}
+	} else if d.router != nil {
 		if route, err := d.router.PickRoute(routingLink); err == nil {
 			outTag := route.GetOutboundTag()
 			if h := d.ohm.GetHandler(outTag); h != nil {
@@ -265,10 +497,13 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		return
 	}
 
+	ob.Tag = handler.Tag()
 	if accessMessage := log.AccessMessageFromContext(ctx); accessMessage != nil {
 		if tag := handler.Tag(); tag != "" {
 			if inTag == "" {
 				accessMessage.Detour = tag
+			} else if isPickRoute == 1 {
+				accessMessage.Detour = inTag + " ==> " + tag
 			} else if isPickRoute == 2 {
 				accessMessage.Detour = inTag + " -> " + tag
 			} else {

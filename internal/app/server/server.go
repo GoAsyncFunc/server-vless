@@ -17,6 +17,7 @@ import (
 	"github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/app/stats"
 	xnet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
@@ -29,6 +30,7 @@ import (
 type Config struct {
 	LogLevel   string
 	DNSServers string // comma-separated
+	AssetDir   string
 	Version    string // set from main, used in startup banner
 }
 
@@ -88,6 +90,10 @@ func (s *Server) Start() error {
 
 	log.Infoln("server start")
 
+	if err := applyAssetDir(s.config.AssetDir); err != nil {
+		return err
+	}
+
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	ctx := s.ctx
 
@@ -122,6 +128,10 @@ func (s *Server) Start() error {
 			s.cancel()
 		}
 	}()
+
+	if s.serviceConfig.AllowPrivateOutbound {
+		log.Warnln("allow-private-outbound is enabled; proxy users can reach private and loopback IP destinations from this server")
+	}
 
 	nodeConfig, err := fetchInitialNodeInfo(ctx, s.apiClient)
 	if err != nil {
@@ -173,6 +183,17 @@ func (s *Server) Start() error {
 
 	success = true
 	printStartupBanner(s.config.Version, nodeConfig, len(s.service.Users()))
+	return nil
+}
+
+func applyAssetDir(assetDir string) error {
+	assetDir = strings.TrimSpace(assetDir)
+	if assetDir == "" {
+		return nil
+	}
+	if err := os.Setenv(platform.AssetLocation, assetDir); err != nil {
+		return fmt.Errorf("set asset dir: %w", err)
+	}
 	return nil
 }
 

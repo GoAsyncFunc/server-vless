@@ -13,13 +13,19 @@ func OutboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.OutboundHand
 	outboundDetourConfig.Protocol = "freedom"
 	outboundDetourConfig.Tag = "direct"
 
-	domainStrategy := config.DomainStrategy
+	domainStrategy := ""
+	if config != nil {
+		domainStrategy = config.DomainStrategy
+	}
 	if domainStrategy == "" {
 		domainStrategy = "UseIPv4v6"
 	}
 
 	settings := map[string]interface{}{
 		"domainStrategy": domainStrategy,
+	}
+	if config != nil && config.AllowPrivateOutbound {
+		settings["ipsBlocked"] = []string{}
 	}
 	settingsBytes, err := json.Marshal(settings)
 	if err != nil {
