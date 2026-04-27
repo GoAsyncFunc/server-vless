@@ -60,6 +60,31 @@ func TestInboundBuilderDefaultsMLKEMSettingsFromV2Board(t *testing.T) {
 	}
 }
 
+func TestInboundBuilderNilConfigEnablesSniffing(t *testing.T) {
+	node := &api.NodeInfo{
+		Vless: &api.VlessNode{
+			CommonNode: api.CommonNode{ServerPort: 443},
+			Network:    "tcp",
+		},
+	}
+
+	inbound, err := InboundBuilder(nil, node)
+	if err != nil {
+		t.Fatalf("InboundBuilder returned error: %v", err)
+	}
+	receiverMessage, err := inbound.ReceiverSettings.GetInstance()
+	if err != nil {
+		t.Fatalf("GetInstance returned error: %v", err)
+	}
+	receiver, ok := receiverMessage.(*proxyman.ReceiverConfig)
+	if !ok {
+		t.Fatalf("receiver settings type = %T, want *proxyman.ReceiverConfig", receiverMessage)
+	}
+	if receiver.SniffingSettings == nil || !receiver.SniffingSettings.Enabled {
+		t.Fatal("expected sniffing enabled with nil config")
+	}
+}
+
 func TestInboundBuilderSniffingToggle(t *testing.T) {
 	node := &api.NodeInfo{
 		Vless: &api.VlessNode{

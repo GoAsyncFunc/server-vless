@@ -29,7 +29,7 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 	inboundDetourConfig.Tag = fmt.Sprintf("vless_%d", vlessInfo.ServerPort)
 
 	// Sniffing
-	if !config.DisableSniffing {
+	if config == nil || !config.DisableSniffing {
 		sniffingConfig := &conf.SniffingConfig{
 			Enabled: true,
 			DestOverride: conf.StringList{

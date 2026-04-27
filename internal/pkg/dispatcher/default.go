@@ -306,11 +306,7 @@ func (d *DefaultDispatcher) shouldOverride(result SniffResult, request session.S
 	return false
 }
 
-func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, network net.Network) (SniffResult, error) {
-	if metadataOnly {
-		return nil, common.ErrNoClue
-	}
-
+func sniffer(ctx context.Context, cReader *cachedReader, network net.Network) (SniffResult, error) {
 	payload := buf.NewWithSize(32767)
 	defer payload.Release()
 
@@ -356,7 +352,7 @@ func (d *DefaultDispatcher) sniffDestination(ctx context.Context, reader buf.Rea
 		return reader, destination
 	}
 	cReader := &cachedReader{reader: ensureTimeoutReader(reader)}
-	result, err := sniffer(ctx, cReader, false, destination.Network)
+	result, err := sniffer(ctx, cReader, destination.Network)
 	if err == nil {
 		content.Protocol = result.Protocol()
 	}
@@ -446,6 +442,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	return nil
 }
 
+type routePickType int
+
+const (
+	routePickDefault routePickType = iota
+	routePickForced
+	routePickRule
+)
+
 func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination) {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
@@ -454,12 +458,12 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 
 	routingLink := routing_session.AsRoutingContext(ctx)
 	inTag := routingLink.GetInboundTag()
-	isPickRoute := 0
+	routePick := routePickDefault
 
 	if forcedOutboundTag := session.GetForcedOutboundTagFromContext(ctx); forcedOutboundTag != "" {
 		ctx = session.SetForcedOutboundTagToContext(ctx, "")
 		if h := d.ohm.GetHandler(forcedOutboundTag); h != nil {
-			isPickRoute = 1
+			routePick = routePickForced
 			errors.LogInfo(ctx, "CustomDispatcher: taking platform initialized detour [", forcedOutboundTag, "] for [", destination, "]")
 			handler = h
 		} else {
@@ -472,7 +476,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		if route, err := d.router.PickRoute(routingLink); err == nil {
 			outTag := route.GetOutboundTag()
 			if h := d.ohm.GetHandler(outTag); h != nil {
-				isPickRoute = 2
+				routePick = routePickRule
 				errors.LogInfo(ctx, "CustomDispatcher: route rule [", route.GetRuleTag(), "] -> [", outTag, "] for [", destination, "]")
 				handler = h
 			} else {
@@ -502,9 +506,9 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		if tag := handler.Tag(); tag != "" {
 			if inTag == "" {
 				accessMessage.Detour = tag
-			} else if isPickRoute == 1 {
+			} else if routePick == routePickForced {
 				accessMessage.Detour = inTag + " ==> " + tag
-			} else if isPickRoute == 2 {
+			} else if routePick == routePickRule {
 				accessMessage.Detour = inTag + " -> " + tag
 			} else {
 				accessMessage.Detour = inTag + " >> " + tag

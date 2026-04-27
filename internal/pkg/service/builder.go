@@ -212,22 +212,24 @@ func (b *Builder) fetchUsersMonitor() error {
 	return nil
 }
 
+func sameRuntimeConfig(a, b *api.NodeInfo) bool {
+	return reflect.DeepEqual(a.Routes, b.Routes) &&
+		reflect.DeepEqual(a.Rules, b.Rules) &&
+		reflect.DeepEqual(a.RawDNS, b.RawDNS)
+}
+
 func (b *Builder) runtimeConfigUnchanged(newNodeInfo *api.NodeInfo) bool {
 	if b.nodeInfo == nil || newNodeInfo == nil {
 		return true
 	}
-	return reflect.DeepEqual(b.nodeInfo.Routes, newNodeInfo.Routes) &&
-		reflect.DeepEqual(b.nodeInfo.Rules, newNodeInfo.Rules) &&
-		reflect.DeepEqual(b.nodeInfo.RawDNS, newNodeInfo.RawDNS)
+	return sameRuntimeConfig(b.nodeInfo, newNodeInfo)
 }
 
 func (b *Builder) runtimeWarningAlreadyLogged(newNodeInfo *api.NodeInfo) bool {
 	if b.lastRuntimeConfigWarning == nil || newNodeInfo == nil {
 		return false
 	}
-	return reflect.DeepEqual(b.lastRuntimeConfigWarning.Routes, newNodeInfo.Routes) &&
-		reflect.DeepEqual(b.lastRuntimeConfigWarning.Rules, newNodeInfo.Rules) &&
-		reflect.DeepEqual(b.lastRuntimeConfigWarning.RawDNS, newNodeInfo.RawDNS)
+	return sameRuntimeConfig(b.lastRuntimeConfigWarning, newNodeInfo)
 }
 
 func (b *Builder) resetRuntimeConfigWarningLocked() {
@@ -262,7 +264,9 @@ func (b *Builder) checkNodeConfigMonitor() error {
 	b.mu.RUnlock()
 	if runtimeConfigUnchanged {
 		b.mu.Lock()
-		b.resetRuntimeConfigWarningLocked()
+		if b.lastRuntimeConfigWarning != nil {
+			b.resetRuntimeConfigWarningLocked()
+		}
 		b.mu.Unlock()
 	}
 	if inboundUnchanged && runtimeConfigUnchanged {
