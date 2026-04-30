@@ -41,6 +41,24 @@ func TestRuntimeConfigWarningReset(t *testing.T) {
 	}
 }
 
+func TestClassifyNodeConfigChangeRequiresRestartForMixedRuntimeAndInboundChange(t *testing.T) {
+	if got := classifyNodeConfigChange(false, false); got != nodeConfigChangeNeedsRestart {
+		t.Fatalf("mixed runtime and inbound change = %v, want %v", got, nodeConfigChangeNeedsRestart)
+	}
+}
+
+func TestClassifyNodeConfigChangeAllowsInboundReloadOnlyWhenRuntimeUnchanged(t *testing.T) {
+	if got := classifyNodeConfigChange(false, true); got != nodeConfigChangeReloadInbound {
+		t.Fatalf("inbound-only change = %v, want %v", got, nodeConfigChangeReloadInbound)
+	}
+}
+
+func TestClassifyNodeConfigChangeWarnsForRuntimeOnlyChange(t *testing.T) {
+	if got := classifyNodeConfigChange(true, false); got != nodeConfigChangeNeedsRestart {
+		t.Fatalf("runtime-only change = %v, want %v", got, nodeConfigChangeNeedsRestart)
+	}
+}
+
 func TestNextTrafficScanUsersLockedAdvancesCursorInBatches(t *testing.T) {
 	b := &Builder{userList: []api.UserInfo{
 		{Id: 1, Uuid: "uuid-1"},

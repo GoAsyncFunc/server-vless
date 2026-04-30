@@ -117,6 +117,87 @@ func TestBuildRouteConfigDefaultOutLastWins(t *testing.T) {
 	}
 }
 
+func TestBuildRouteConfigDefaultOutCanReplaceDirect(t *testing.T) {
+	result, err := buildRouteConfig([]api.Route{
+		{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"direct","protocol":"freedom"}`},
+	}, api.Rules{})
+	if err != nil {
+		t.Fatalf("buildRouteConfig returned error: %v", err)
+	}
+	if result.defaultOutbound == nil {
+		t.Fatal("expected default outbound")
+	}
+	if result.defaultOutbound.Tag != "direct" {
+		t.Fatalf("default outbound tag = %q, want direct", result.defaultOutbound.Tag)
+	}
+}
+
+func TestBuildRouteConfigDefaultOutCanReusePreviousDefaultTag(t *testing.T) {
+	result, err := buildRouteConfig([]api.Route{
+		{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"same","protocol":"freedom"}`},
+		{Id: 2, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"same","protocol":"freedom"}`},
+	}, api.Rules{})
+	if err != nil {
+		t.Fatalf("buildRouteConfig returned error: %v", err)
+	}
+	if result.defaultOutbound == nil {
+		t.Fatal("expected default outbound")
+	}
+	if result.defaultOutbound.Tag != "same" {
+		t.Fatalf("default outbound tag = %q, want same", result.defaultOutbound.Tag)
+	}
+}
+
+func TestBuildRouteConfigDefaultOutCanSwitchBackToDirect(t *testing.T) {
+	result, err := buildRouteConfig([]api.Route{
+		{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"first","protocol":"freedom"}`},
+		{Id: 2, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"direct","protocol":"freedom"}`},
+	}, api.Rules{})
+	if err != nil {
+		t.Fatalf("buildRouteConfig returned error: %v", err)
+	}
+	if result.defaultOutbound == nil {
+		t.Fatal("expected default outbound")
+	}
+	if result.defaultOutbound.Tag != "direct" {
+		t.Fatalf("default outbound tag = %q, want direct", result.defaultOutbound.Tag)
+	}
+}
+
+func TestBuildRouteConfigRejectsRouteReusingCurrentDefaultOutTag(t *testing.T) {
+	_, err := buildRouteConfig([]api.Route{
+		{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"panel","protocol":"freedom"}`},
+		{Id: 2, Action: api.RouteActionRoute, Match: []string{"domain:example.com"}, ActionValue: `{"tag":"panel","protocol":"freedom"}`},
+	}, api.Rules{})
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
+func TestBuildRouteConfigRejectsPrivateBypassWhenPrivateOutboundDisabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings string
+	}{
+		{name: "camel case", settings: `{"ipsBlocked":[]}`},
+		{name: "pascal case", settings: `{"IpsBlocked":[]}`},
+		{name: "lowercase", settings: `{"ipsblocked":[]}`},
+		{name: "mixed acronym", settings: `{"IPsBlocked":[]}`},
+		{name: "snake case", settings: `{"ips_blocked":[]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildRouteConfig([]api.Route{
+				{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"direct","protocol":"freedom","settings":` + tt.settings + `}`},
+			}, api.Rules{})
+			if err == nil || !strings.Contains(err.Error(), "ipsBlocked") {
+				t.Fatalf("expected ipsBlocked policy error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestBuildRouteConfigRejectsInvalidOutbound(t *testing.T) {
 	_, err := buildRouteConfig([]api.Route{
 		{Id: 1, Action: api.RouteActionRoute, Match: []string{"domain:example.com"}, ActionValue: `{`},

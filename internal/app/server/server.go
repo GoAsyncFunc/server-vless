@@ -207,7 +207,8 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	}
 	pbLogConfig := logConfig.Build()
 
-	routeConfig, err := buildRouteConfig(nodeInfo.Routes, nodeInfo.Rules)
+	allowPrivateOutbound := s.serviceConfig != nil && s.serviceConfig.AllowPrivateOutbound
+	routeConfig, err := buildRouteConfigWithPolicy(nodeInfo.Routes, nodeInfo.Rules, allowPrivateOutbound)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +388,10 @@ type routeBuildResult struct {
 }
 
 func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, error) {
+	return buildRouteConfigWithPolicy(routes, legacy, false)
+}
+
+func buildRouteConfigWithPolicy(routes []api.Route, legacy api.Rules, allowPrivateOutbound bool) (*routeBuildResult, error) {
 	result := &routeBuildResult{}
 	rc := &conf.RouterConfig{}
 	seenTags := map[string]struct{}{"direct": {}, "block": {}}
@@ -471,7 +476,7 @@ func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, 
 			if len(matches) == 0 {
 				continue
 			}
-			outbound, tag, err := buildRouteOutbound(route, seenTags)
+			outbound, tag, err := buildRouteOutbound(route, seenTags, allowPrivateOutbound)
 			if err != nil {
 				return nil, err
 			}
@@ -485,7 +490,12 @@ func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, 
 				return nil, err
 			}
 		case api.RouteActionDefaultOut:
-			outbound, tag, err := buildRouteOutbound(route, seenTags)
+			defaultSeenTags := copyStringSet(seenTags)
+			delete(defaultSeenTags, "direct")
+			if result.defaultOutbound != nil {
+				delete(defaultSeenTags, result.defaultOutbound.Tag)
+			}
+			outbound, tag, err := buildRouteOutbound(route, defaultSeenTags, allowPrivateOutbound)
 			if err != nil {
 				return nil, err
 			}
@@ -509,13 +519,42 @@ func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, 
 	return result, nil
 }
 
-func buildRouteOutbound(route api.Route, seenTags map[string]struct{}) (*core.OutboundHandlerConfig, string, error) {
+func copyStringSet(values map[string]struct{}) map[string]struct{} {
+	copied := make(map[string]struct{}, len(values))
+	for value := range values {
+		copied[value] = struct{}{}
+	}
+	return copied
+}
+
+func validateRouteOutboundPolicy(route api.Route, outbound conf.OutboundDetourConfig, allowPrivateOutbound bool) error {
+	protocol := strings.ToLower(strings.TrimSpace(outbound.Protocol))
+	if allowPrivateOutbound || (protocol != "freedom" && protocol != "direct") || outbound.Settings == nil {
+		return nil
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(*outbound.Settings, &settings); err != nil {
+		return fmt.Errorf("parse route %d outbound settings: %w", route.Id, err)
+	}
+	for key := range settings {
+		normalizedKey := strings.ToLower(strings.ReplaceAll(key, "_", ""))
+		if normalizedKey == "ipsblocked" {
+			return fmt.Errorf("route %d freedom outbound ipsBlocked cannot be set when private outbound is disabled", route.Id)
+		}
+	}
+	return nil
+}
+
+func buildRouteOutbound(route api.Route, seenTags map[string]struct{}, allowPrivateOutbound bool) (*core.OutboundHandlerConfig, string, error) {
 	if strings.TrimSpace(route.ActionValue) == "" {
 		return nil, "", fmt.Errorf("route %d %s action_value is required", route.Id, route.Action)
 	}
 	var outbound conf.OutboundDetourConfig
 	if err := json.Unmarshal([]byte(route.ActionValue), &outbound); err != nil {
 		return nil, "", fmt.Errorf("parse route %d outbound: %w", route.Id, err)
+	}
+	if err := validateRouteOutboundPolicy(route, outbound, allowPrivateOutbound); err != nil {
+		return nil, "", err
 	}
 	if outbound.Tag == "" {
 		outbound.Tag = fmt.Sprintf("route_%d", route.Id)

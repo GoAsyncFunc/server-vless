@@ -52,6 +52,24 @@ type Builder struct {
 
 const trafficScanBatchSize = 2048
 
+type nodeConfigChange int
+
+const (
+	nodeConfigChangeNone nodeConfigChange = iota
+	nodeConfigChangeReloadInbound
+	nodeConfigChangeNeedsRestart
+)
+
+func classifyNodeConfigChange(inboundUnchanged, runtimeConfigUnchanged bool) nodeConfigChange {
+	if inboundUnchanged && runtimeConfigUnchanged {
+		return nodeConfigChangeNone
+	}
+	if runtimeConfigUnchanged {
+		return nodeConfigChangeReloadInbound
+	}
+	return nodeConfigChangeNeedsRestart
+}
+
 func New(ctx context.Context, inboundTag string, instance *core.Instance, config *Config, nodeInfo *api.NodeInfo,
 	apiClient *api.Client,
 ) *Builder {
@@ -262,6 +280,7 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		runtimeConfigUnchanged = b.runtimeConfigUnchanged(newNodeInfo)
 	}
 	b.mu.RUnlock()
+	change := classifyNodeConfigChange(inboundUnchanged, runtimeConfigUnchanged)
 	if runtimeConfigUnchanged {
 		b.mu.Lock()
 		if b.lastRuntimeConfigWarning != nil {
@@ -269,10 +288,10 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		}
 		b.mu.Unlock()
 	}
-	if inboundUnchanged && runtimeConfigUnchanged {
+	if change == nodeConfigChangeNone {
 		return nil
 	}
-	if !runtimeConfigUnchanged {
+	if change == nodeConfigChangeNeedsRestart {
 		b.mu.Lock()
 		shouldWarn := !b.runtimeWarningAlreadyLogged(newNodeInfo)
 		if shouldWarn {
@@ -280,10 +299,8 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		}
 		b.mu.Unlock()
 		if shouldWarn {
-			log.Warnln("Node routing/DNS config changed; full core reload is required, restart server-vless to apply routes, DNS, and custom outbounds")
+			log.Warnln("Node routing/DNS config changed; full core reload is required, restart server-vless to apply routes, DNS, custom outbounds, and any bundled inbound changes")
 		}
-	}
-	if inboundUnchanged {
 		return nil
 	}
 

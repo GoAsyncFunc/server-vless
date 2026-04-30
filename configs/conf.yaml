@@ -1,14 +1,3 @@
-outbounds:
-  - name: gpt
-    type: direct
-    direct:
-      mode: auto
-acl:
-  inline:
-    - reject(all)
-    # - gpt(geosite:openai)
-    # - gpt(geosite:sb)
-    # - gpt(ip.gs)
-    # - gpt(all)
-    # - reject(geoip:au)
-
+# Example only. The current vless-node entrypoint does not load this file.
+# Runtime settings come from CLI/env flags and UniProxy panel data.
+# See README.md for the supported environment variables and reload behavior.
