@@ -14,6 +14,9 @@
 .DS_Store
 *.swp
 
+# Claude Code local settings
+.claude/
+
 # Certificates (Local Development)
 server.crt
 server.key
