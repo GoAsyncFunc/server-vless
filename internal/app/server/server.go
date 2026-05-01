@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -61,12 +62,21 @@ func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config) (
 	}, nil
 }
 
+// nodeInfoFetcher is the minimal panel-API surface used during startup. It is
+// satisfied by *api.Client; tests substitute lightweight stubs.
+type nodeInfoFetcher interface {
+	GetNodeInfo(ctx context.Context) (*api.NodeInfo, error)
+}
+
+// initialNodeInfoBackoffs is the retry schedule fetchInitialNodeInfo walks
+// before giving up. Declared as a package variable so tests can shorten it.
+var initialNodeInfoBackoffs = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+
 // fetchInitialNodeInfo retries transient failures during startup (panel
 // temporarily unreachable, 5xx etc.). Max ~30s total: 1s, 2s, 4s, 8s, 15s.
-func fetchInitialNodeInfo(ctx context.Context, client *api.Client) (*api.NodeInfo, error) {
-	backoffs := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+func fetchInitialNodeInfo(ctx context.Context, client nodeInfoFetcher) (*api.NodeInfo, error) {
 	var lastErr error
-	for i, wait := range append([]time.Duration{0}, backoffs...) {
+	for i, wait := range append([]time.Duration{0}, initialNodeInfoBackoffs...) {
 		if wait > 0 {
 			log.Warnf("retry GetNodeInfo in %v (attempt %d): %v", wait, i, lastErr)
 			select {
@@ -575,6 +585,11 @@ const closeTimeout = 10 * time.Second
 // printStartupBanner writes a one-line startup summary to stderr via fmt so it
 // shows up in docker logs / journald regardless of --log_mode.
 func printStartupBanner(version string, node *api.NodeInfo, userCount int) {
+	printStartupBannerTo(os.Stderr, version, node, userCount)
+}
+
+// printStartupBannerTo is the testable form that takes an explicit writer.
+func printStartupBannerTo(w io.Writer, version string, node *api.NodeInfo, userCount int) {
 	security := "none"
 	switch node.Security {
 	case api.Tls:
@@ -590,7 +605,7 @@ func printStartupBanner(version string, node *api.NodeInfo, userCount int) {
 		}
 		port = node.Vless.ServerPort
 	}
-	fmt.Fprintf(os.Stderr, "vless-node %s (xray %s) started: node=%d :%d %s/%s users=%d\n",
+	fmt.Fprintf(w, "vless-node %s (xray %s) started: node=%d :%d %s/%s users=%d\n",
 		version, core.Version(), node.Id, port, network, security, userCount)
 }
 
