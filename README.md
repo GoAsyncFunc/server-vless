@@ -30,7 +30,7 @@ Optional runtime controls:
 
 ## UniProxy compatibility
 
-The module currently pins `github.com/GoAsyncFunc/uniproxy v0.0.9`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
+The module currently pins `github.com/GoAsyncFunc/uniproxy v0.0.10`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
 
 The code imports the UniProxy public facade at `github.com/GoAsyncFunc/uniproxy/pkg`. If a future UniProxy release removes that facade or renames exported models, update the imports and API model references together.
 
