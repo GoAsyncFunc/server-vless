@@ -11,11 +11,11 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20260425231635-b4f08981becb
+replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20260502215512-b279076ba1a7
 
 require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/apernet/quic-go v0.59.1-0.20260330051153-c402ee641eb6 // indirect
+	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/go-resty/resty/v2 v2.17.2 // indirect
@@ -27,7 +27,7 @@ require (
 	github.com/pires/go-proxyproto v0.12.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
-	github.com/robfig/cron/v3 v3.0.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/sagernet/sing v0.7.14 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.9 // indirect
