@@ -46,11 +46,23 @@ func TestPrintVersionFormat(t *testing.T) {
 		}
 	})
 
-	if !strings.HasPrefix(out, "version=test-1.2.3 ") {
-		t.Errorf("output %q does not start with injected version", out)
+	wantPrefix := Name + " version test-1.2.3 "
+	if !strings.HasPrefix(out, wantPrefix) {
+		t.Errorf("output %q does not start with %q", out, wantPrefix)
 	}
 	if !strings.Contains(out, "xray.version=") {
 		t.Errorf("output %q missing xray.version field", out)
+	}
+}
+
+// TestVersionLineUnifiesFormat is the L2 regression guard: both --version
+// (cli.VersionPrinter) and the `version` subcommand must emit the same
+// canonical string. We assert the helper format directly so any future
+// drift between the two callers is caught.
+func TestVersionLineUnifiesFormat(t *testing.T) {
+	got := versionLine("vless-node", "1.0.0")
+	if !strings.HasPrefix(got, "vless-node version 1.0.0 xray.version=") {
+		t.Errorf("versionLine = %q, want prefix %q", got, "vless-node version 1.0.0 xray.version=")
 	}
 }
 

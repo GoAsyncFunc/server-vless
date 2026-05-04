@@ -17,7 +17,15 @@ var versionCommand = &cli.Command{
 	Action:  printVersion,
 }
 
+// versionLine returns the canonical "<app> version <ver> xray.version=<core>"
+// string. Both cli.VersionPrinter (the --version flag handler in main.go) and
+// printVersion (the `version` subcommand) format their output through this
+// helper so the two paths stay byte-identical.
+func versionLine(appName, appVersion string) string {
+	return fmt.Sprintf("%s version %s xray.version=%s", appName, appVersion, core.Version())
+}
+
 func printVersion(_ *cli.Context) error {
-	fmt.Printf("version=%s xray.version=%s\n", Version, core.Version())
+	fmt.Println(versionLine(Name, Version))
 	return nil
 }

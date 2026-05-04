@@ -6,7 +6,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	cli "github.com/urfave/cli/v2"
-	"github.com/xtls/xray-core/core"
 
 	_ "github.com/GoAsyncFunc/server-vless/internal/pkg/dep"
 )
@@ -23,7 +22,7 @@ var Version = "dev"
 
 func main() {
 	cli.VersionPrinter = func(c *cli.Context) {
-		fmt.Printf("%s version %s xray.version=%s\n", c.App.Name, c.App.Version, core.Version())
+		fmt.Println(versionLine(c.App.Name, c.App.Version))
 	}
 
 	app := &cli.App{
