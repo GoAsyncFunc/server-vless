@@ -17,6 +17,9 @@
 # Claude Code local settings
 .claude/
 
+# Code Review Graph (MCP tool generated)
+.code-review-graph/
+
 # Certificates (Local Development)
 server.crt
 server.key
