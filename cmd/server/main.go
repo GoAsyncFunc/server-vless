@@ -11,6 +11,11 @@ import (
 	_ "github.com/GoAsyncFunc/server-vless/internal/pkg/dep"
 )
 
+const (
+	Name      = "vless-node"
+	CopyRight = "GoAsyncFunc@2025"
+)
+
 // Version is injected at build time via -ldflags "-X main.Version=...".
 // Kept in package main so the linker flag resolves; referenced by
 // version.go (printVersion) and node.go (runVlessNode populates config.Version).

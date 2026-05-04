@@ -16,11 +16,6 @@ import (
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 )
 
-const (
-	Name      = "vless-node"
-	CopyRight = "GoAsyncFunc@2025"
-)
-
 // Package-level config holders. cli.Flag.Destination requires stable addresses;
 // promoting these from main()'s locals lets appFlags / setupLogger / runVlessNode
 // be top-level functions without closure capture.
@@ -29,7 +24,6 @@ var (
 	apiConfig     api.Config
 	serviceConfig service.Config
 	certConfig    service.CertConfig
-	dnsServers    string
 )
 
 // appFlags returns the full cli.Flag list for the vless-node binary. Each flag
@@ -122,7 +116,7 @@ func appFlags() []cli.Flag {
 			Name:        "dns",
 			Usage:       "Comma-separated DNS servers (overrides v2board routes DNS and default)",
 			EnvVars:     []string{"DNS"},
-			Destination: &dnsServers,
+			Destination: &config.DNSServers,
 			Required:    false,
 		},
 		&cli.StringFlag{
@@ -160,7 +154,7 @@ func appFlags() []cli.Flag {
 
 // setupLogger is the cli.App.Before hook. Configures logrus level from the
 // resolved log_mode flag.
-func setupLogger(c *cli.Context) error {
+func setupLogger(_ *cli.Context) error {
 	log.SetFormatter(&log.TextFormatter{})
 	switch config.LogLevel {
 	case server.LogLevelDebug:
@@ -181,12 +175,11 @@ func setupLogger(c *cli.Context) error {
 
 // runVlessNode is the cli.App.Action handler. Wires the parsed flag values into
 // the server.Server, starts the daemon loops, and blocks until SIGINT/SIGTERM.
-func runVlessNode(c *cli.Context) error {
+func runVlessNode(_ *cli.Context) error {
 	serviceConfig.Cert = &certConfig
 
 	// Ensure NodeType is set properly
 	apiConfig.NodeType = api.Vless
-	config.DNSServers = dnsServers
 	config.Version = Version
 
 	serv, err := server.New(&config, &apiConfig, &serviceConfig)

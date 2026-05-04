@@ -17,7 +17,7 @@ var versionCommand = &cli.Command{
 	Action:  printVersion,
 }
 
-func printVersion(c *cli.Context) error {
+func printVersion(_ *cli.Context) error {
 	fmt.Printf("version=%s xray.version=%s\n", Version, core.Version())
 	return nil
 }
