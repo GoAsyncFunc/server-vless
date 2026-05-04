@@ -85,7 +85,6 @@ func appFlags() []cli.Flag {
 			Required:    false,
 			Destination: &serviceConfig.ReportTrafficsInterval,
 		},
-		// HeartbeatInterval check.
 		&cli.DurationFlag{
 			Name:        "heartbeat_interval, hbi",
 			Usage:       "API request cycle(heartbeat), unit: second",
@@ -193,9 +192,33 @@ func validateRequiredConfig() error {
 	return nil
 }
 
+// recoverPanic is the standard deferred handler for runVlessNode. It logs
+// any in-flight panic with a stack trace, surfaces it through the named
+// return error pointer, and unconditionally closes the server. Extracted as
+// a top-level function so its behavior can be unit-tested without spinning
+// up a real server / signal loop.
+func recoverPanic(closer interface{ Close() }, errOut *error) {
+	if e := recover(); e != nil {
+		buf := make([]byte, 4096)
+		n := runtime.Stack(buf, false)
+		log.Errorf("panic: %v\nstack trace:\n%s", e, buf[:n])
+		if errOut != nil {
+			*errOut = fmt.Errorf("panic in vless-node: %v", e)
+		}
+	}
+	if closer != nil {
+		closer.Close()
+	}
+}
+
 // runVlessNode is the cli.App.Action handler. Wires the parsed flag values into
 // the server.Server, starts the daemon loops, and blocks until SIGINT/SIGTERM.
-func runVlessNode(_ *cli.Context) error {
+//
+// Uses a named return value so the panic-recovery defer can surface the
+// failure as an ordinary error. main()'s log.Fatal then prints it and exits
+// non-zero, which keeps the defer chain intact (os.Exit would skip any other
+// pending defers in this goroutine).
+func runVlessNode(_ *cli.Context) (err error) {
 	if err := validateRequiredConfig(); err != nil {
 		return err
 	}
@@ -215,18 +238,7 @@ func runVlessNode(_ *cli.Context) error {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
 
-	defer func() {
-		if e := recover(); e != nil {
-			log.Errorf("panic: %v", e)
-			buf := make([]byte, 4096)
-			n := runtime.Stack(buf, false)
-			log.Errorf("stack trace:\n%s", buf[:n])
-			serv.Close()
-			os.Exit(1)
-		} else {
-			serv.Close()
-		}
-	}()
+	defer recoverPanic(serv, &err)
 
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)

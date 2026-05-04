@@ -210,3 +210,65 @@ func TestSetupLoggerRejectsUnknownLevel(t *testing.T) {
 		t.Errorf("error message %q does not mention rejected value", err.Error())
 	}
 }
+
+// fakeCloser counts Close() invocations for recoverPanic tests.
+type fakeCloser struct{ closed int }
+
+func (f *fakeCloser) Close() { f.closed++ }
+
+func TestRecoverPanicCapturesPanic(t *testing.T) {
+	snapshotLogger(t)
+
+	var got error
+	closer := &fakeCloser{}
+
+	func() {
+		defer recoverPanic(closer, &got)
+		panic("boom-from-test")
+	}()
+
+	if got == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(got.Error(), "boom-from-test") {
+		t.Errorf("error %q missing original panic value", got.Error())
+	}
+	if closer.closed != 1 {
+		t.Errorf("closer.Close called %d times, want 1", closer.closed)
+	}
+}
+
+func TestRecoverPanicNoPanicStillCloses(t *testing.T) {
+	snapshotLogger(t)
+
+	var got error
+	closer := &fakeCloser{}
+
+	func() {
+		defer recoverPanic(closer, &got)
+		// no panic
+	}()
+
+	if got != nil {
+		t.Errorf("unexpected error: %v", got)
+	}
+	if closer.closed != 1 {
+		t.Errorf("closer.Close called %d times, want 1", closer.closed)
+	}
+}
+
+func TestRecoverPanicToleratesNilCloserAndErrPtr(t *testing.T) {
+	snapshotLogger(t)
+
+	// Should not segfault when called with nil dependencies after a panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("recoverPanic itself panicked: %v", r)
+		}
+	}()
+
+	func() {
+		defer recoverPanic(nil, nil)
+		panic("nil-deps")
+	}()
+}
