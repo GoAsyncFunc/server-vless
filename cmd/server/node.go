@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,14 +35,12 @@ func appFlags() []cli.Flag {
 			Name:        "api",
 			Usage:       "Server address",
 			EnvVars:     []string{"API"},
-			Required:    true,
 			Destination: &apiConfig.APIHost,
 		},
 		&cli.StringFlag{
 			Name:        "token",
 			Usage:       "Token of server API",
 			EnvVars:     []string{"TOKEN"},
-			Required:    true,
 			Destination: &apiConfig.Key,
 		},
 		&cli.StringFlag{
@@ -66,7 +65,6 @@ func appFlags() []cli.Flag {
 			Name:        "node",
 			Usage:       "Node ID",
 			EnvVars:     []string{"NODE"},
-			Required:    true,
 			Destination: &apiConfig.NodeID,
 		},
 		&cli.DurationFlag{
@@ -173,9 +171,35 @@ func setupLogger(_ *cli.Context) error {
 	return nil
 }
 
+// validateRequiredConfig verifies the fields that must be supplied for the
+// node binary to start. We do this manually instead of marking the cli flags
+// `Required: true` so the `version` subcommand path is not blocked by missing
+// daemon credentials (urfave/cli v2 enforces App.Required before subcommand
+// Actions run).
+func validateRequiredConfig() error {
+	var missing []string
+	if apiConfig.APIHost == "" {
+		missing = append(missing, "api")
+	}
+	if apiConfig.Key == "" {
+		missing = append(missing, "token")
+	}
+	if apiConfig.NodeID == 0 {
+		missing = append(missing, "node")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required flag(s) not set: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // runVlessNode is the cli.App.Action handler. Wires the parsed flag values into
 // the server.Server, starts the daemon loops, and blocks until SIGINT/SIGTERM.
 func runVlessNode(_ *cli.Context) error {
+	if err := validateRequiredConfig(); err != nil {
+		return err
+	}
+
 	serviceConfig.Cert = &certConfig
 
 	// Ensure NodeType is set properly

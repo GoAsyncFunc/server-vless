@@ -67,37 +67,76 @@ func TestAppFlagsEnvVarsAreUnique(t *testing.T) {
 	}
 }
 
-func TestAppFlagsRequiredSet(t *testing.T) {
+// TestAppLevelRequiredFlagsAvoided is a regression guard for the version
+// subcommand fix: no flag in appFlags() may set Required=true. urfave/cli v2
+// enforces App.Required before any subcommand Action runs, so marking
+// api/token/node as Required would block `vless-node version` from ever
+// reaching printVersion. validateRequiredConfig() handles the check inside
+// runVlessNode instead.
+func TestAppLevelRequiredFlagsAvoided(t *testing.T) {
 	type requiredLister interface {
-		// urfave/cli v2's RequiredFlag interface.
 		IsRequired() bool
 	}
 
-	wantRequired := map[string]bool{
-		"api":   true,
-		"token": true,
-		"node":  true,
-	}
-
 	flags := appFlags()
-	got := make(map[string]bool, len(wantRequired))
 	for _, f := range flags {
-		name := f.Names()[0]
-		if _, watch := wantRequired[name]; !watch {
-			continue
-		}
 		req, ok := f.(requiredLister)
 		if !ok {
-			t.Errorf("flag %q does not expose IsRequired()", name)
 			continue
 		}
-		got[name] = req.IsRequired()
+		if req.IsRequired() {
+			t.Errorf("flag %q is App-Required; would block `version` subcommand. Move the check into validateRequiredConfig.", f.Names()[0])
+		}
+	}
+}
+
+// snapshotAPIConfig saves and restores the apiConfig package var so
+// validateRequiredConfig tests stay isolated.
+func snapshotAPIConfig(t *testing.T) {
+	t.Helper()
+	prev := apiConfig
+	t.Cleanup(func() { apiConfig = prev })
+}
+
+func TestValidateRequiredConfig(t *testing.T) {
+	cases := []struct {
+		name        string
+		host        string
+		key         string
+		nodeID      int
+		wantErr     bool
+		wantMissing []string // substrings expected in error message
+	}{
+		{name: "all set", host: "https://api.example", key: "tok", nodeID: 1, wantErr: false},
+		{name: "all missing", wantErr: true, wantMissing: []string{"api", "token", "node"}},
+		{name: "missing api", key: "tok", nodeID: 1, wantErr: true, wantMissing: []string{"api"}},
+		{name: "missing token", host: "h", nodeID: 1, wantErr: true, wantMissing: []string{"token"}},
+		{name: "missing node", host: "h", key: "tok", wantErr: true, wantMissing: []string{"node"}},
 	}
 
-	for name, want := range wantRequired {
-		if got[name] != want {
-			t.Errorf("flag %q: Required=%v, want %v", name, got[name], want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshotAPIConfig(t)
+			apiConfig.APIHost = tc.host
+			apiConfig.Key = tc.key
+			apiConfig.NodeID = tc.nodeID
+
+			err := validateRequiredConfig()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				for _, want := range tc.wantMissing {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing expected substring %q", err.Error(), want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
