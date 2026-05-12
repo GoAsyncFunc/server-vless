@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"sync"
 	"time"
@@ -485,16 +486,20 @@ func (b *Builder) heartbeatMonitor() error {
 		return nil
 	}
 
-	data := make(map[int][]string, len(users))
+	data := make(map[int][]netip.Addr, len(users))
 	for _, user := range users {
 		name := "user>>>" + buildUserEmail(tag, user.Id, user.Uuid) + ">>>online"
 		om := statsManager.GetOnlineMap(name)
 		if om == nil {
 			continue
 		}
-		var ips []string
+		var ips []netip.Addr
 		om.ForEach(func(ip string, _ int64) bool {
-			ips = append(ips, ip)
+			addr, err := netip.ParseAddr(ip)
+			if err != nil {
+				return true
+			}
+			ips = append(ips, addr)
 			return true
 		})
 		if len(ips) > 0 {
