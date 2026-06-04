@@ -21,9 +21,5 @@ import (
 	// Transport Headers (for full compatibility)
 	_ "github.com/xtls/xray-core/transport/internet/headers/http"
 	_ "github.com/xtls/xray-core/transport/internet/headers/noop"
-	_ "github.com/xtls/xray-core/transport/internet/finalmask/header/srtp"
-	_ "github.com/xtls/xray-core/transport/internet/finalmask/header/dtls"
-	_ "github.com/xtls/xray-core/transport/internet/finalmask/header/utp"
-	_ "github.com/xtls/xray-core/transport/internet/finalmask/header/wechat"
-	_ "github.com/xtls/xray-core/transport/internet/finalmask/header/wireguard"
+	// mKCP header obfuscation lives in the finalmask subsystem.
 )

@@ -129,6 +129,51 @@ func TestBuildKCPConfigRejectsBadJSON(t *testing.T) {
 	}
 }
 
+func TestBuildKCPConfigTranslatesLegacyHeaderAndSeed(t *testing.T) {
+	stream := &conf.StreamConfig{}
+	v := &api.VlessNode{NetworkSettings: json.RawMessage(`{"mtu":1350,"header":{"type":"srtp"},"seed":"pw"}`)}
+	if err := buildKCPConfig(stream, v); err != nil {
+		t.Fatalf("buildKCPConfig returned error: %v", err)
+	}
+	if stream.KCPSettings == nil {
+		t.Fatal("expected KCPSettings to be set")
+	}
+	if stream.KCPSettings.HeaderConfig != nil {
+		t.Fatalf("expected HeaderConfig cleared, got %s", string(stream.KCPSettings.HeaderConfig))
+	}
+	if stream.KCPSettings.Seed != nil {
+		t.Fatalf("expected Seed cleared, got %q", *stream.KCPSettings.Seed)
+	}
+	if stream.FinalMask == nil || len(stream.FinalMask.Udp) != 2 {
+		t.Fatalf("expected FinalMask with 2 udp masks, got %+v", stream.FinalMask)
+	}
+}
+
+func TestBuildKCPConfigPlainHasNoFinalMask(t *testing.T) {
+	stream := &conf.StreamConfig{}
+	v := &api.VlessNode{NetworkSettings: json.RawMessage(`{"mtu":1350,"tti":50}`)}
+	if err := buildKCPConfig(stream, v); err != nil {
+		t.Fatalf("buildKCPConfig returned error: %v", err)
+	}
+	if stream.FinalMask != nil {
+		t.Fatalf("expected nil FinalMask for plain mKCP, got %+v", stream.FinalMask)
+	}
+}
+
+// regression: obfuscated mKCP must build without erroring
+func TestBuildKCPConfigBuildsWithObfuscation(t *testing.T) {
+	stream := &conf.StreamConfig{}
+	network := conf.TransportProtocol("kcp")
+	stream.Network = &network
+	v := &api.VlessNode{NetworkSettings: json.RawMessage(`{"mtu":1350,"tti":50,"header":{"type":"srtp"}}`)}
+	if err := buildKCPConfig(stream, v); err != nil {
+		t.Fatalf("buildKCPConfig returned error: %v", err)
+	}
+	if _, err := stream.Build(); err != nil {
+		t.Fatalf("StreamConfig.Build() returned error: %v", err)
+	}
+}
+
 func TestBuildUserEmailFormat(t *testing.T) {
 	got := buildUserEmail("inbound-tag", 42, "uuid-x")
 	want := "inbound-tag|42|uuid-x"

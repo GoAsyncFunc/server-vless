@@ -224,6 +224,19 @@ func buildKCPConfig(streamSetting *conf.StreamConfig, vlessInfo *api.VlessNode) 
 	if err := json.Unmarshal(vlessInfo.NetworkSettings, kcpConfig); err != nil {
 		return fmt.Errorf("unmarshal kcp config error: %w", err)
 	}
+
+	// mKCP header/seed are handled by finalmask; translate them out and drop
+	// from KCPConfig, which rejects them.
+	finalMask, err := buildLegacyKCPMasks(vlessInfo.NetworkSettings)
+	if err != nil {
+		return err
+	}
+	kcpConfig.HeaderConfig = nil
+	kcpConfig.Seed = nil
+
 	streamSetting.KCPSettings = kcpConfig
+	if finalMask != nil {
+		streamSetting.FinalMask = finalMask
+	}
 	return nil
 }
