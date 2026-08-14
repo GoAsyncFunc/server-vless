@@ -8,7 +8,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/xtls/xray-core v1.260602.0-pre
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20260602235856-fdb9b616fc0e
