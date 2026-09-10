@@ -12,6 +12,7 @@ func BenchmarkReportTrafficUserSliceSelection(b *testing.B) {
 		b.Run(fmt.Sprintf("users_%d", userCount), func(b *testing.B) {
 			builder := &Builder{userList: benchmarkUsers(userCount)}
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				builder.mu.Lock()
 				users := builder.nextTrafficScanUsersLocked(trafficScanBatchSize)
@@ -34,6 +35,7 @@ func BenchmarkCompareUserList(b *testing.B) {
 				newUsers[userCount-1].Uuid = "changed"
 			}
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				deleted, added := builder.compareUserList(newUsers, oldUsers)
 				if userCount > 0 && (len(deleted) != 1 || len(added) != 1) {
