@@ -63,12 +63,28 @@ empty-short-ID REALITY node. These negatives had working positive controls.
 Certificates were verified; production services were unchanged. Temporary panel
 records, containers, certificates, keys and binaries were cleaned up.
 
-**ML-DSA remains blocked:** adding an ephemeral seed and matching client Verify
-key caused handshake failure for both client versions against the private Nginx
-TLS 1.3 target. Server log: handshake did not complete successfully. The cause
-(target prerequisites versus core compatibility) has not been isolated. Negative
-results from this failing setup are not valid authentication acceptance evidence.
-Do not advertise ML-DSA interoperability based on field forwarding alone.
+**ML-DSA follow-up resolved the test blocker:** with node commit `4cbd44a`,
+the same ephemeral seed/Verify pair, and the same private Nginx TLS 1.3 target,
+both clients failed with an 836-byte DER target certificate. Replacing only the
+target certificate with a 5896-byte DER certificate (extra SAN entries, same
+hostname and RSA key) made both 26.9.9 and 26.6.1 clients pass the 256 KiB
+byte-checked download and 32/512/1200-byte UDP echo. This isolates the earlier
+failure to the test target's certificate/handshake characteristics, not missing
+ML-DSA field forwarding.
+
+With the longer certificate, an unrelated ML-DSA Verify key caused both clients
+to reject transfers. Restoring the correct Verify key restored successful TCP
+and UDP transfers. Wrong UUID and wrong short ID also failed with working
+positive controls. No verification was disabled. No further runtime code change
+was necessary; temporary panel records, containers, credentials and binaries
+were removed, and the production node remained untouched.
+
+The precise minimum acceptable handshake size was not measured, and DER size
+alone is not a universal eligibility test for REALITY targets. This validates
+this target/client combination only. Select and actually test an appropriate
+TLS 1.3 target when enabling ML-DSA; do not treat the experiment's padded
+certificate as a production camouflage recommendation. The earlier negatives
+from the failing short-certificate setup remain invalid acceptance evidence.
 
 IPv6 destination formatting is unit-tested, but actual IPv6 connectivity and
 VLESS ML-KEM encryption were not exercised in this run. The full matrix above
