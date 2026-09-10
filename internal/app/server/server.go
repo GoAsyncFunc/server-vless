@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -121,6 +122,9 @@ func (s *Server) Start() error {
 		if s.service != nil {
 			if err := s.service.Close(); err != nil {
 				log.Errorf("service cleanup after failed start: %s", err)
+				if errors.Is(err, service.ErrShutdownIncomplete) {
+					return
+				}
 			}
 			s.service = nil
 		}
@@ -628,6 +632,10 @@ func (s *Server) Close() {
 	if s.service != nil {
 		if err := s.service.Close(); err != nil {
 			log.Errorf("service close failed: %s", err)
+			if errors.Is(err, service.ErrShutdownIncomplete) {
+				log.Error("core left intact because a background task has not exited")
+				return
+			}
 		}
 	}
 

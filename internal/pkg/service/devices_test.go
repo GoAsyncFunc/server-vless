@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
@@ -34,5 +35,21 @@ func TestPanelDeviceCountsEnforceAdmission(t *testing.T) {
 	}
 	if _, ok := limiter.AcquireDevice(email, "192.0.2.10"); ok {
 		t.Fatal("global limit was not enforced")
+	}
+	b.lastReportedIPs = map[int][]string{1: {"192.0.2.1"}}
+	b.lastReportedAt = map[int]time.Time{1: time.Now()}
+	b.syncDeviceLimits()
+	release, ok := limiter.AcquireDevice(email, "192.0.2.10")
+	if !ok {
+		t.Fatal("fresh local report should receive credit")
+	}
+	release()
+	b.lastReportedAt[1] = time.Now().Add(-localDeviceCreditTTL - time.Second)
+	b.syncDeviceLimits()
+	if _, ok := limiter.AcquireDevice(email, "192.0.2.10"); ok {
+		t.Fatal("expired local report hid remote occupancy")
+	}
+	if len(b.lastReportedIPs) != 0 || len(b.lastReportedAt) != 0 {
+		t.Fatal("expired metadata not removed")
 	}
 }

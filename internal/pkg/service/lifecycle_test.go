@@ -160,13 +160,34 @@ func TestReloadRollback304TrafficAndIdlePush(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Closing with more users than a normal scan batch must drain everyone,
+	// including retired counters, using a fresh (not cancelled) context.
+	b.mu.Lock()
+	for id := 2; id <= trafficScanBatchSize+2; id++ {
+		b.userList = append(b.userList, api.UserInfo{Id: id, Uuid: users[0].Uuid})
+	}
+	lastID := trafficScanBatchSize + 2
+	lastEmail := buildUserEmail(b.inboundTag, lastID, users[0].Uuid)
+	lastCounter, _ := sm.GetOrRegisterCounter("user>>>" + lastEmail + ">>>traffic>>>uplink")
+	lastCounter.Add(77)
+	b.mu.Unlock()
+	up.Add(11)
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	} // idempotent: no duplicate push
 	mu.Lock()
 	defer mu.Unlock()
 	if config304 < 2 || user304 < 2 {
 		t.Fatalf("missing real 304 coverage: %d %d", config304, user304)
 	}
-	if len(pushes) != 3 {
-		t.Fatalf("push count %d, want traffic + 2 idle heartbeats", len(pushes))
+	if len(pushes) != 4 {
+		t.Fatalf("push count %d, want traffic + 2 idle heartbeats + final drain", len(pushes))
+	}
+	if pushes[3][lastID][0] != 77 || pushes[3][1][0] != 11 {
+		t.Fatalf("incomplete shutdown drain: %v", pushes[3])
 	}
 	if got := pushes[0][1]; len(got) != 2 || got[0] != 130 || got[1] != 465 {
 		t.Fatalf("lost/duplicated retired traffic: %v", pushes)

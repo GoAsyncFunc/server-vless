@@ -1,0 +1,12 @@
+.git
+.github
+.pi
+.DS_Store
+.env
+.env.*
+*.key
+*.pem
+coverage.out
+*.test
+vless-node
+build/vless-node-*

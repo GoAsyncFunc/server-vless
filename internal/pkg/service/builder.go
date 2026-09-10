@@ -10,7 +10,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/xtls/xray-core/common/protocol"
-	"github.com/xtls/xray-core/common/task"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/stats"
@@ -47,10 +46,14 @@ type Builder struct {
 	retiredUsers                   map[string]int
 	reportMu                       sync.Mutex
 	lastReportedIPs                map[int][]string
-	fetchUsersMonitorPeriodic      *task.Periodic
-	reportTrafficsMonitorPeriodic  *task.Periodic
-	heartbeatMonitorPeriodic       *task.Periodic
-	checkNodeConfigMonitorPeriodic *task.Periodic
+	lastReportedAt                 map[int]time.Time
+	deviceSyncMu                   sync.Mutex
+	closeOnce                      sync.Once
+	closeErr                       error
+	fetchUsersMonitorPeriodic      *periodic
+	reportTrafficsMonitorPeriodic  *periodic
+	heartbeatMonitorPeriodic       *periodic
+	checkNodeConfigMonitorPeriodic *periodic
 	ctx                            context.Context
 	cancel                         context.CancelFunc
 }
@@ -113,11 +116,11 @@ func (b *Builder) Start() error {
 	b.userList = userList
 	b.syncDeviceLimits()
 
-	b.fetchUsersMonitorPeriodic = &task.Periodic{
+	b.fetchUsersMonitorPeriodic = &periodic{
 		Interval: b.config.FetchUsersInterval,
 		Execute:  b.fetchUsersMonitor,
 	}
-	b.reportTrafficsMonitorPeriodic = &task.Periodic{
+	b.reportTrafficsMonitorPeriodic = &periodic{
 		// V2Board considers a node stale after 300 seconds without /push.
 		Interval: min(b.config.ReportTrafficsInterval, 120*time.Second),
 		Execute:  b.reportTrafficsMonitor,
@@ -126,7 +129,7 @@ func (b *Builder) Start() error {
 	if checkInterval <= 0 {
 		checkInterval = b.config.FetchUsersInterval
 	}
-	b.checkNodeConfigMonitorPeriodic = &task.Periodic{
+	b.checkNodeConfigMonitorPeriodic = &periodic{
 		Interval: checkInterval,
 		Execute:  b.checkNodeConfigMonitor,
 	}
@@ -153,7 +156,7 @@ func (b *Builder) Start() error {
 		heartbeatInterval = b.config.FetchUsersInterval
 	}
 	if heartbeatInterval > 0 {
-		b.heartbeatMonitorPeriodic = &task.Periodic{
+		b.heartbeatMonitorPeriodic = &periodic{
 			Interval: min(heartbeatInterval, 60*time.Second),
 			Execute:  b.heartbeatMonitor,
 		}
@@ -166,30 +169,8 @@ func (b *Builder) Start() error {
 }
 
 func (b *Builder) Close() error {
-	b.cancel()
-	if b.fetchUsersMonitorPeriodic != nil {
-		b.fetchUsersMonitorPeriodic.Close()
-	}
-	if b.reportTrafficsMonitorPeriodic != nil {
-		b.reportTrafficsMonitorPeriodic.Close()
-	}
-	if b.checkNodeConfigMonitorPeriodic != nil {
-		b.checkNodeConfigMonitorPeriodic.Close()
-	}
-	if b.heartbeatMonitorPeriodic != nil {
-		b.heartbeatMonitorPeriodic.Close()
-	}
-	// Drop rate-limit buckets so the global registry doesn't keep stale
-	// entries across restarts in long-lived embedded scenarios.
-	b.mu.RLock()
-	tag := b.inboundTag
-	users := b.userList
-	b.mu.RUnlock()
-	for _, u := range users {
-		limiter.Remove(buildUserEmail(tag, u.Id, u.Uuid))
-		limiter.RemoveDevices(buildUserEmail(tag, u.Id, u.Uuid))
-	}
-	return nil
+	b.closeOnce.Do(func() { b.closeErr = b.shutdown() })
+	return b.closeErr
 }
 
 // Users returns a snapshot of the current user list. Safe for concurrent use.
@@ -464,11 +445,20 @@ func (b *Builder) nextTrafficScanUsersLocked(batchSize int) []api.UserInfo {
 }
 
 func (b *Builder) reportTrafficsMonitor() error {
+	return b.reportTraffic(b.ctx, false)
+}
+
+func (b *Builder) reportTraffic(ctx context.Context, all bool) error {
 	b.reportMu.Lock()
 	defer b.reportMu.Unlock()
 	b.mu.Lock()
 	tag := b.inboundTag
-	users := b.nextTrafficScanUsersLocked(trafficScanBatchSize)
+	batchSize := trafficScanBatchSize
+	if all {
+		batchSize = len(b.userList)
+		b.trafficScanCursor = 0
+	}
+	users := b.nextTrafficScanUsersLocked(batchSize)
 
 	currentTraffic := make(map[int][2]int64)
 	for _, user := range users {
@@ -498,9 +488,9 @@ func (b *Builder) reportTrafficsMonitor() error {
 	b.mu.Unlock()
 
 	log.Infof("%d user traffic needs to be reported", len(userTraffic))
-	if err := b.apiClient.ReportUserTraffic(b.ctx, userTraffic); err != nil {
+	if err := b.apiClient.ReportUserTraffic(ctx, userTraffic); err != nil {
 		log.Errorln("server error when submitting traffic, will retry next cycle:", err)
-		return nil
+		return err
 	}
 
 	b.mu.Lock()
@@ -519,6 +509,8 @@ func (b *Builder) reportTrafficsMonitor() error {
 }
 
 func (b *Builder) heartbeatMonitor() error {
+	b.deviceSyncMu.Lock()
+	defer b.deviceSyncMu.Unlock()
 	b.mu.RLock()
 	users := make([]api.UserInfo, len(b.userList))
 	copy(users, b.userList)
@@ -558,7 +550,11 @@ func (b *Builder) heartbeatMonitor() error {
 		if b.lastReportedIPs == nil {
 			b.lastReportedIPs = make(map[int][]string)
 		}
+		if b.lastReportedAt == nil {
+			b.lastReportedAt = make(map[int]time.Time)
+		}
 		for uid, ips := range data {
+			b.lastReportedAt[uid] = time.Now()
 			b.lastReportedIPs[uid] = nil
 			for _, ip := range ips {
 				b.lastReportedIPs[uid] = append(b.lastReportedIPs[uid], ip.String())
@@ -566,7 +562,7 @@ func (b *Builder) heartbeatMonitor() error {
 		}
 		b.mu.Unlock()
 	}
-	b.syncDeviceLimits()
+	b.syncDeviceLimitsLocked()
 	return nil
 }
 
