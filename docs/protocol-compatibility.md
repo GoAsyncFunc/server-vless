@@ -102,15 +102,33 @@ startup wait and SSH interruption. A complete bounded background rerun against
 an IPv4 private origin passed all six positive combinations. Temporary panel
 records, containers, binaries and key files were removed afterward.
 
-### IPv6 remains environment-blocked
+### IPv6 validation
 
 IPv6 destination formatting is unit-tested, but actual IPv6 connectivity remains
 unverified. The Planet Docker network has IPv6 disabled, and the development
 panel namespace could not bind `[::1]:18080` (EADDRNOTAVAIL). The failed target
 startup is not a protocol failure, and negatives from that setup are invalid.
-Existing panel network settings were not changed. A separately provisioned
-IPv6-enabled test namespace/network is still needed; no public IPv6 capability
-has been established. The full matrix above remains incomplete.
+Existing panel network settings were not changed.
+
+Follow-up on a separate Debian 11 VPS with IPv6 enabled used `unshare --net`
+with only loopback brought up. Node source `6bb433e`, both 26.9.9 and 26.6.1
+clients, a loopback simulated UniProxy API and an ephemeral TLS 1.3 origin ran
+inside that namespace. All four combinations passed 64 KiB exact-byte downloads:
+plain VLESS -> `[::1]:18080`, and REALITY/Vision -> `[::1]:18080` with the REALITY
+camouflage target set to `[::1]:18443`, each with both client versions.
+
+The installed curl initially sent `::1` as a SOCKS domain with
+`--socks5-hostname`, which Xray correctly rejected as an invalid domain. Using
+`--socks5` encoded an IPv6 destination and made the tests pass; no validation
+was relaxed. This is a test-client encoding distinction, not evidence that
+IPv6 forwarding itself failed.
+
+This proves IPv6 loopback TCP forwarding and a real IPv6 REALITY target handshake,
+not public IPv6 proxy egress or inbound reachability. Direct host IPv6 ping and
+HTTPS had separately passed, but are not proxy tests. No Laravel instance was
+used in this follow-up. Temporary key/config files and binaries were removed,
+the namespace exited, and the host retained only its existing SSH listeners.
+The full matrix above remains incomplete.
 
 Do not silently map removed h2/quic transports to a different protocol, disable
 TLS verification, or drop encryption settings to make a configuration appear to
