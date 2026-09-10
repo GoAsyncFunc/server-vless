@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"strings"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 	"github.com/xtls/xray-core/core"
@@ -93,7 +95,18 @@ func InboundBuilder(config *Config, nodeInfo *api.NodeInfo) (*core.InboundHandle
 
 func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config *Config) (*conf.StreamConfig, error) {
 	streamSetting := new(conf.StreamConfig)
-	transportProtocol := conf.TransportProtocol(vlessInfo.Network)
+	network := strings.ToLower(strings.TrimSpace(vlessInfo.Network))
+	switch network {
+	case "raw":
+		network = "tcp"
+	case "websocket":
+		network = "ws"
+	case "splithttp":
+		network = "xhttp"
+	case "mkcp":
+		network = "kcp"
+	}
+	transportProtocol := conf.TransportProtocol(network)
 	streamSetting.Network = &transportProtocol
 
 	if len(vlessInfo.NetworkSettings) > 0 {
@@ -139,9 +152,10 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 		realitySettings := new(conf.REALITYConfig)
 
 		realitySettings.PrivateKey = vlessInfo.TlsSettings.PrivateKey
-		if len(vlessInfo.TlsSettings.ShortId) > 0 {
-			realitySettings.ShortIds = []string{vlessInfo.TlsSettings.ShortId}
-		}
+		realitySettings.Mldsa65Seed = vlessInfo.TlsSettings.Mldsa65Seed
+		// An empty short ID is a supported explicit choice in Xray. An empty
+		// list, in contrast, is invalid and prevents the listener from starting.
+		realitySettings.ShortIds = []string{vlessInfo.TlsSettings.ShortId}
 		realitySettings.ServerNames = []string{vlessInfo.TlsSettings.ServerName}
 
 		dest := vlessInfo.TlsSettings.Dest
@@ -153,7 +167,8 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 			destPort = "443"
 		}
 
-		fullDest := dest + ":" + destPort
+		// JoinHostPort handles bare/bracketed IPv6 without double brackets.
+		fullDest := net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(dest, "["), "]"), destPort)
 		fullDestBytes, err := json.Marshal(fullDest)
 		if err != nil {
 			return nil, fmt.Errorf("marshal REALITY dest: %w", err)
