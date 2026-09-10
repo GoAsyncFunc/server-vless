@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/xtls/xray-core/infra/conf"
 )
@@ -35,7 +36,8 @@ func mkcpLegacyMask(payload any) (conf.Mask, error) {
 }
 
 // turn legacy header/seed into a finalmask udp mask chain (nil = plain mKCP).
-// order matters: header outermost, seed inner (old wire layout).
+// Preserve the pre-26.9 wire layout: the newer Finalmask manager reverses
+// the configured chain before wrapping, so reverse our legacy translation too.
 func buildLegacyKCPMasks(networkSettings []byte) (*conf.FinalMask, error) {
 	if len(networkSettings) == 0 {
 		return nil, nil
@@ -75,5 +77,6 @@ func buildLegacyKCPMasks(networkSettings []byte) (*conf.FinalMask, error) {
 	if len(masks) == 0 {
 		return nil, nil
 	}
+	slices.Reverse(masks)
 	return &conf.FinalMask{Udp: masks}, nil
 }

@@ -21,7 +21,7 @@ func TestBuildLegacyKCPMasks(t *testing.T) {
 		{name: "dtls", settings: `{"header":{"type":"dtls"}}`, wantSettings: []string{`{"header":"dtls"}`}},
 		{name: "wireguard", settings: `{"header":{"type":"wireguard"}}`, wantSettings: []string{`{"header":"wireguard"}`}},
 		{name: "seed only", settings: `{"seed":"pw"}`, wantSettings: []string{`{"value":"pw"}`}},
-		{name: "header and seed order", settings: `{"header":{"type":"srtp"},"seed":"pw"}`, wantSettings: []string{`{"header":"srtp"}`, `{"value":"pw"}`}},
+		{name: "header and seed order", settings: `{"header":{"type":"srtp"},"seed":"pw"}`, wantSettings: []string{`{"value":"pw"}`, `{"header":"srtp"}`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

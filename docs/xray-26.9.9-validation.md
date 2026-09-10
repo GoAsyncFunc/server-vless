@@ -70,8 +70,59 @@ were unchanged after testing.
 - Regression tests cover concurrent counter registration, online-IP cleanup,
   private-outbound configuration and invalid API configuration.
 
-## Not covered
+## Additional remote validation
 
-TLS/REALITY, Vision, mKCP, UDP relay, VLESS post-quantum encryption, older clients,
-user/config hot reload, production queue workers, full Docker image build,
-long-running load and live production deployment were not validated by this run.
+A second isolated run used the pushed `b385f89` node build, followed by the mKCP
+compatibility fix below. Both clients were built from the project's pinned fork:
+
+- New client: 26.9.9 (`52a412d9e2f5`).
+- Old client: 26.6.1 (`fdb9b616fc0e`, the pre-upgrade dependency).
+
+The following combinations passed with both clients:
+
+| Transport/security | TCP file transfer | SOCKS5 UDP relay |
+| --- | --- | --- |
+| TCP + TLS | Pass | Pass |
+| TCP + TLS + Vision | Pass | Pass |
+| TCP + REALITY + Vision | Pass | Pass |
+| WebSocket + TLS | Pass | Pass |
+| gRPC + TLS | Pass | Pass |
+| XHTTP + TLS | Pass | Pass |
+| mKCP + SRTP header + seed | Pass after fix | Pass after fix |
+
+Each file transfer compared a 256 KiB random payload byte-for-byte. UDP used a
+private-network echo endpoint with 32-, 512- and 1200-byte random payloads. TLS
+clients explicitly trusted the ephemeral test certificate; certificate checking
+was not disabled. REALITY used ephemeral X25519 keys and a private TLS 1.3 target.
+The initial REALITY test had an empty client key due to the test script parsing
+an outdated key-output label; correcting that test setup made both clients pass.
+
+### mKCP compatibility issue and fix
+
+The new Finalmask manager reverses its configured mask chain before wrapping,
+unlike the old manager. Consequently, simply keeping the previous generated
+header/seed array broke old-client interoperability when both masks were present.
+The project now reverses its legacy KCP translation to preserve the pre-upgrade
+wire format. The old client retains its old explicit Finalmask order; a new
+client using explicit Finalmask JSON must reverse that order. Both then passed
+TCP file transfer and UDP relay. A single header or seed is unaffected.
+
+### Hot reload
+
+On a running WS+TLS test node, without changing its process PID/start time:
+
+- Banning the dedicated user rejected new connections; restoring it allowed them.
+- Rotating its UUID rejected the old UUID and accepted the new UUID.
+- Changing its WS path rejected the old path and accepted the new path.
+
+The panel recorded traffic reports for all seven dedicated nodes. Test nodes,
+user/group/statistics, listeners, temporary credentials and binaries were cleaned
+up again; the production node PID and 443 listener remained unchanged.
+
+## Remaining coverage gaps
+
+VLESS post-quantum encryption, HTTPUpgrade+TLS, other mKCP masks, UDP loss/MTU
+stress, real-world client apps other than these two fork builds, production queue
+workers, prolonged load and live production deployment remain untested. The
+GitHub Docker workflow passed after `b385f89`; this integration run mounted the
+tested binary in an existing runtime image rather than deploying that new image.
