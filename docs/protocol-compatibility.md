@@ -86,9 +86,31 @@ TLS 1.3 target when enabling ML-DSA; do not treat the experiment's padded
 certificate as a production camouflage recommendation. The earlier negatives
 from the failing short-certificate setup remain invalid acceptance evidence.
 
-IPv6 destination formatting is unit-tested, but actual IPv6 connectivity and
-VLESS ML-KEM encryption were not exercised in this run. The full matrix above
-remains incomplete.
+### VLESS ML-KEM follow-up
+
+On node source `010a03d` (same runtime as `4cbd44a`), the panel's
+`mlkem768x25519plus` settings were exercised in native, xorpub and random modes,
+with server ticket `0s` and client `1rtt`, using ephemeral ML-KEM-768 keys.
+Both 26.9.9 and 26.6.1 fork clients passed 256 KiB byte-checked downloads and
+32/512/1200-byte UDP echo for all three modes. Wrong UUID tests with the current
+client rejected transfers and had working positive controls. Wrong encryption
+keys, 0-RTT/resumption, padding variants and real client applications were not
+covered. No runtime changes were required.
+
+Initial runs were invalidated by an unavailable IPv6 target, insufficient client
+startup wait and SSH interruption. A complete bounded background rerun against
+an IPv4 private origin passed all six positive combinations. Temporary panel
+records, containers, binaries and key files were removed afterward.
+
+### IPv6 remains environment-blocked
+
+IPv6 destination formatting is unit-tested, but actual IPv6 connectivity remains
+unverified. The Planet Docker network has IPv6 disabled, and the development
+panel namespace could not bind `[::1]:18080` (EADDRNOTAVAIL). The failed target
+startup is not a protocol failure, and negatives from that setup are invalid.
+Existing panel network settings were not changed. A separately provisioned
+IPv6-enabled test namespace/network is still needed; no public IPv6 capability
+has been established. The full matrix above remains incomplete.
 
 Do not silently map removed h2/quic transports to a different protocol, disable
 TLS verification, or drop encryption settings to make a configuration appear to
