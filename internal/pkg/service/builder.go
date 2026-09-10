@@ -42,7 +42,11 @@ type Builder struct {
 	trafficScanCursor              int
 	lastRuntimeConfigWarning       *api.NodeInfo
 	mu                             sync.RWMutex
-	apiClient                      *api.Client
+	apiClient                      PanelAPI
+	pendingNodeInfo                *api.NodeInfo
+	retiredUsers                   map[string]int
+	reportMu                       sync.Mutex
+	lastReportedIPs                map[int][]string
 	fetchUsersMonitorPeriodic      *task.Periodic
 	reportTrafficsMonitorPeriodic  *task.Periodic
 	heartbeatMonitorPeriodic       *task.Periodic
@@ -72,7 +76,7 @@ func classifyNodeConfigChange(inboundUnchanged, runtimeConfigUnchanged bool) nod
 }
 
 func New(ctx context.Context, inboundTag string, instance *core.Instance, config *Config, nodeInfo *api.NodeInfo,
-	apiClient *api.Client,
+	apiClient PanelAPI,
 ) *Builder {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Builder{
@@ -107,13 +111,15 @@ func (b *Builder) Start() error {
 		return err
 	}
 	b.userList = userList
+	b.syncDeviceLimits()
 
 	b.fetchUsersMonitorPeriodic = &task.Periodic{
 		Interval: b.config.FetchUsersInterval,
 		Execute:  b.fetchUsersMonitor,
 	}
 	b.reportTrafficsMonitorPeriodic = &task.Periodic{
-		Interval: b.config.ReportTrafficsInterval,
+		// V2Board considers a node stale after 300 seconds without /push.
+		Interval: min(b.config.ReportTrafficsInterval, 120*time.Second),
 		Execute:  b.reportTrafficsMonitor,
 	}
 	checkInterval := b.config.CheckNodeInterval
@@ -140,9 +146,15 @@ func (b *Builder) Start() error {
 		return fmt.Errorf("node config monitor periodic start error: %s", err)
 	}
 
-	if b.config.HeartbeatInterval > 0 {
+	// Device admission depends on alive/alivelist even when online reporting
+	// was not explicitly configured. Keep a bounded refresh cadence.
+	heartbeatInterval := b.config.HeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = b.config.FetchUsersInterval
+	}
+	if heartbeatInterval > 0 {
 		b.heartbeatMonitorPeriodic = &task.Periodic{
-			Interval: b.config.HeartbeatInterval,
+			Interval: min(heartbeatInterval, 60*time.Second),
 			Execute:  b.heartbeatMonitor,
 		}
 		log.Infoln("Start heartbeat monitoring")
@@ -175,6 +187,7 @@ func (b *Builder) Close() error {
 	b.mu.RUnlock()
 	for _, u := range users {
 		limiter.Remove(buildUserEmail(tag, u.Id, u.Uuid))
+		limiter.RemoveDevices(buildUserEmail(tag, u.Id, u.Uuid))
 	}
 	return nil
 }
@@ -195,6 +208,7 @@ func (b *Builder) fetchUsersMonitor() error {
 		return nil
 	}
 
+	defer b.syncDeviceLimits()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -204,20 +218,18 @@ func (b *Builder) fetchUsersMonitor() error {
 		for i, u := range deleted {
 			email := buildUserEmail(b.inboundTag, u.Id, u.Uuid)
 			deletedEmail[i] = email
-			up, down, _ := b.getTraffic(email)
-			b.addPendingTrafficLocked(u.Id, up, down)
-			b.unregisterUserStats(email)
+			b.retireUserLocked(email, u.Id)
 		}
 		if err := b.removeUsers(deletedEmail, b.inboundTag); err != nil {
 			log.Errorln(err)
 			// Continue to add users even if remove failed
 		}
 	}
-	if len(added) > 0 {
-		if err := b.addNewUser(added); err != nil {
-			log.Errorln(err)
-			return nil
-		}
+	// Reconcile against the actual handler even on 304/cached user lists;
+	// a previous partial apply must not become permanent cache divergence.
+	if err := b.addNewUser(newUserList); err != nil {
+		log.Errorln(err)
+		return nil
 	}
 	if len(deleted) > 0 || len(added) > 0 {
 		log.Infof("%d user deleted, %d user added", len(deleted), len(added))
@@ -227,6 +239,7 @@ func (b *Builder) fetchUsersMonitor() error {
 	// (same ID+UUID) are picked up. Set() is a no-op when unchanged.
 	for _, u := range newUserList {
 		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
+		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
 	}
 	return nil
 }
@@ -261,6 +274,15 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		log.Errorln("Failed to fetch node info:", err)
 		return nil
 	}
+	b.mu.Lock()
+	if newNodeInfo != nil {
+		b.pendingNodeInfo = newNodeInfo
+	} else {
+		// UniProxy commits its ETag before the local apply succeeds. Retry
+		// the desired snapshot even when subsequent responses are 304.
+		newNodeInfo = b.pendingNodeInfo
+	}
+	b.mu.Unlock()
 	if newNodeInfo == nil || newNodeInfo.Vless == nil {
 		return nil
 	}
@@ -332,16 +354,19 @@ func (b *Builder) checkNodeConfigMonitor() error {
 
 	oldInboundConfig, err := InboundBuilder(b.config, oldNodeInfo)
 	if err != nil {
+		_ = newHandler.Close()
 		log.Errorln("Failed to build rollback inbound config:", err)
 		return nil
 	}
 	rawOldHandler, err := core.CreateObject(b.instance, oldInboundConfig)
 	if err != nil {
+		_ = newHandler.Close()
 		log.Errorln("Failed to create rollback inbound handler object:", err)
 		return nil
 	}
 	oldHandler, ok := rawOldHandler.(inbound.Handler)
 	if !ok {
+		_ = newHandler.Close()
 		log.Errorln("Created rollback object is not an InboundHandler")
 		return nil
 	}
@@ -352,36 +377,55 @@ func (b *Builder) checkNodeConfigMonitor() error {
 
 	inboundManager, ok := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager)
 	if !ok {
+		_ = newHandler.Close()
+		_ = oldHandler.Close()
 		log.Errorln("Inbound manager feature is unavailable")
 		return nil
 	}
+	// Populate both handlers before removing the working inbound. Rollback
+	// must restore actual users, not only our cached userList.
+	if err := b.populateHandler(newHandler, newInboundConfig.Tag, newNodeInfo); err != nil {
+		_ = newHandler.Close()
+		_ = oldHandler.Close()
+		return err
+	}
+	if err := b.populateHandler(oldHandler, b.inboundTag, oldNodeInfo); err != nil {
+		_ = newHandler.Close()
+		_ = oldHandler.Close()
+		return err
+	}
 	if err := inboundManager.RemoveHandler(b.ctx, b.inboundTag); err != nil {
+		_ = newHandler.Close()
+		_ = oldHandler.Close()
 		log.Errorln("Failed to remove old inbound handler:", err)
 		return nil
 	}
 	if err := inboundManager.AddHandler(b.ctx, newHandler); err != nil {
 		log.Errorln("Failed to add new inbound handler:", err)
+		// Xray inserts the handler into its map before Start can fail.
+		_ = inboundManager.RemoveHandler(b.ctx, newInboundConfig.Tag)
+		_ = newHandler.Close()
 		if restoreErr := inboundManager.AddHandler(b.ctx, oldHandler); restoreErr != nil {
 			log.Errorln("Failed to restore old inbound handler after reload failure:", restoreErr)
 		}
 		return nil
 	}
 
+	_ = oldHandler.Close()
 	oldTag := b.inboundTag
+	b.pendingNodeInfo = nil
 	b.nodeInfo = newNodeInfo
 	b.inboundTag = newInboundConfig.Tag
 
 	if oldTag != b.inboundTag {
 		for _, u := range b.userList {
-			b.unregisterUserStats(buildUserEmail(oldTag, u.Id, u.Uuid))
+			b.retireUserLocked(buildUserEmail(oldTag, u.Id, u.Uuid), u.Id)
 		}
 	}
 
-	if len(b.userList) > 0 {
-		log.Infof("Re-adding %d users to new inbound...", len(b.userList))
-		if err := b.addNewUser(b.userList); err != nil {
-			log.Errorln("Failed to re-add users after reload:", err)
-		}
+	for _, u := range b.userList {
+		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
+		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
 	}
 
 	log.Infoln("Node configuration reloaded successfully. New Tag:", b.inboundTag)
@@ -420,10 +464,11 @@ func (b *Builder) nextTrafficScanUsersLocked(batchSize int) []api.UserInfo {
 }
 
 func (b *Builder) reportTrafficsMonitor() error {
+	b.reportMu.Lock()
+	defer b.reportMu.Unlock()
 	b.mu.Lock()
 	tag := b.inboundTag
 	users := b.nextTrafficScanUsersLocked(trafficScanBatchSize)
-	b.mu.Unlock()
 
 	currentTraffic := make(map[int][2]int64)
 	for _, user := range users {
@@ -434,13 +479,12 @@ func (b *Builder) reportTrafficsMonitor() error {
 		}
 	}
 
-	b.mu.Lock()
+	for email, uid := range b.retiredUsers {
+		up, down, _ := b.getTraffic(email)
+		b.addPendingTrafficLocked(uid, up, down)
+	}
 	for uid, t := range currentTraffic {
 		b.addPendingTrafficLocked(uid, t[0], t[1])
-	}
-	if len(b.pendingTraffic) == 0 {
-		b.mu.Unlock()
-		return nil
 	}
 
 	userTraffic := make([]api.UserTraffic, 0, len(b.pendingTraffic))
@@ -509,7 +553,20 @@ func (b *Builder) heartbeatMonitor() error {
 
 	if err := b.apiClient.ReportNodeOnlineUsers(b.ctx, data); err != nil {
 		log.Errorln("server error when sending heartbeat", err)
+	} else if len(data) > 0 {
+		b.mu.Lock()
+		if b.lastReportedIPs == nil {
+			b.lastReportedIPs = make(map[int][]string)
+		}
+		for uid, ips := range data {
+			b.lastReportedIPs[uid] = nil
+			for _, ip := range ips {
+				b.lastReportedIPs[uid] = append(b.lastReportedIPs[uid], ip.String())
+			}
+		}
+		b.mu.Unlock()
 	}
+	b.syncDeviceLimits()
 	return nil
 }
 
@@ -590,6 +647,7 @@ func (b *Builder) addNewUser(userInfo []api.UserInfo) error {
 	// quietly cleared).
 	for _, u := range userInfo {
 		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
+		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
 	}
 	return b.addUsers(users, b.inboundTag)
 }
@@ -617,11 +675,13 @@ func (b *Builder) addUsers(users []*protocol.User, tag string) error {
 	for _, user := range users {
 		mUser, err := user.ToMemoryUser()
 		if err != nil {
-			log.Errorf("failed to create memory user %s: %s", user.Email, err)
+			return fmt.Errorf("create memory user: %w", err)
+		}
+		if userManager.GetUser(b.ctx, user.Email) != nil {
 			continue
 		}
 		if err := userManager.AddUser(b.ctx, mUser); err != nil {
-			log.Errorf("failed to add user %s: %s", user.Email, err)
+			return fmt.Errorf("add memory user: %w", err)
 		}
 	}
 	return nil

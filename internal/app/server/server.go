@@ -45,7 +45,7 @@ const (
 type Server struct {
 	instance      *core.Instance
 	serviceConfig *service.Config
-	apiClient     *api.Client
+	apiClient     *service.PanelClient
 	config        *Config
 	service       *service.Builder
 	mu            sync.Mutex
@@ -54,7 +54,7 @@ type Server struct {
 }
 
 func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config) (*Server, error) {
-	client, err := api.NewWithError(apiConfig)
+	client, err := service.NewPanelClient(apiConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create panel API client: %w", err)
 	}
@@ -574,6 +574,11 @@ func buildRouteOutbound(route api.Route, seenTags map[string]struct{}, allowPriv
 	}
 	if _, ok := seenTags[outbound.Tag]; ok {
 		return nil, "", fmt.Errorf("route %d outbound tag %q conflicts with existing outbound", route.Id, outbound.Tag)
+	}
+	if allowPrivateOutbound {
+		if err := service.ApplyPrivateOutboundOptIn(&outbound); err != nil {
+			return nil, "", err
+		}
 	}
 	built, err := outbound.Build()
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juju/ratelimit"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
@@ -166,18 +165,17 @@ func (d *DefaultDispatcher) wrapDispatchLinks(ctx context.Context, inboundLink, 
 		return
 	}
 
+	// Raw socket splicing would bypass our dynamic limiter and counters.
+	sessionInbound.CanSpliceCopy = 3
 	p := d.policy.ForLevel(user.Level)
-	bucket := limiter.Bucket(user.Email)
 	if c := d.userCounter(user.Email, p.Stats.UserUplink, "uplink"); c != nil {
 		inboundLink.Writer = &SizeStatWriter{Counter: c, Writer: inboundLink.Writer}
 	}
 	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
 		outboundLink.Writer = &SizeStatWriter{Counter: c, Writer: outboundLink.Writer}
 	}
-	if bucket != nil {
-		inboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: inboundLink.Writer}
-		outboundLink.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outboundLink.Writer}
-	}
+	inboundLink.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: inboundLink.Writer}
+	outboundLink.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: outboundLink.Writer}
 	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
 }
 
@@ -187,18 +185,16 @@ func (d *DefaultDispatcher) wrapDispatchLink(ctx context.Context, outbound *tran
 		return
 	}
 
+	sessionInbound.CanSpliceCopy = 3
 	p := d.policy.ForLevel(user.Level)
-	bucket := limiter.Bucket(user.Email)
 	if c := d.userCounter(user.Email, p.Stats.UserUplink, "uplink"); c != nil {
 		outbound.Reader = &SizeStatReader{Counter: c, Reader: outbound.Reader}
 	}
 	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
 		outbound.Writer = &SizeStatWriter{Counter: c, Writer: outbound.Writer}
 	}
-	if bucket != nil {
-		outbound.Reader = &RateLimitedReader{Bucket: bucket, Reader: outbound.Reader}
-		outbound.Writer = &RateLimitedWriter{Bucket: bucket, Writer: outbound.Writer}
-	}
+	outbound.Reader = &RateLimitedReader{Context: ctx, Email: user.Email, Reader: outbound.Reader}
+	outbound.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: outbound.Writer}
 	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
 }
 
@@ -386,9 +382,14 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		ctx = session.ContextWithContent(ctx, content)
 	}
 
+	release, err := reserveDevice(ctx)
+	if err != nil {
+		return nil, err
+	}
 	inbound, outbound := d.getLink(ctx)
 
 	go func() {
+		defer release()
 		defer func() {
 			if r := recover(); r != nil {
 				errors.LogError(ctx, "CustomDispatcher: panic in routedDispatch: ",
@@ -425,6 +426,13 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		ctx = session.ContextWithContent(ctx, content)
 	}
 
+	release, err := reserveDevice(ctx)
+	if err != nil {
+		common.Close(outbound.Writer)
+		common.Interrupt(outbound.Reader)
+		return err
+	}
+	defer release()
 	d.wrapDispatchLink(ctx, outbound)
 	outbound.Reader, destination = d.sniffDestination(ctx, outbound.Reader, destination, ob, content)
 
@@ -563,15 +571,17 @@ func (r *SizeStatReader) Interrupt() {
 
 // RateLimitedWriter wraps a buf.Writer with a token-bucket cap. Each byte
 // written consumes one token. When the bucket is empty the call blocks
-// (via bucket.Wait) until enough tokens refill, throttling the connection.
+// until enough tokens refill, observing runtime limit changes and cancellation.
 type RateLimitedWriter struct {
-	Bucket *ratelimit.Bucket
-	Writer buf.Writer
+	Context context.Context
+	Email   string
+	Writer  buf.Writer
 }
 
 func (w *RateLimitedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
-	if n := int64(mb.Len()); n > 0 {
-		w.Bucket.Wait(n)
+	if err := limiter.Wait(w.Context, w.Email, int64(mb.Len())); err != nil {
+		buf.ReleaseMulti(mb)
+		return err
 	}
 	return w.Writer.WriteMultiBuffer(mb)
 }
@@ -588,14 +598,16 @@ func (w *RateLimitedWriter) Interrupt() {
 // Used on DispatchLink's outbound.Reader (which delivers uplink bytes to
 // the outbound handler).
 type RateLimitedReader struct {
-	Bucket *ratelimit.Bucket
-	Reader buf.Reader
+	Context context.Context
+	Email   string
+	Reader  buf.Reader
 }
 
 func (r *RateLimitedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	mb, err := r.Reader.ReadMultiBuffer()
-	if n := int64(mb.Len()); n > 0 {
-		r.Bucket.Wait(n)
+	if waitErr := limiter.Wait(r.Context, r.Email, int64(mb.Len())); waitErr != nil {
+		buf.ReleaseMulti(mb)
+		return nil, waitErr
 	}
 	return mb, err
 }

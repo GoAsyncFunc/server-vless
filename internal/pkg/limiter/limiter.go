@@ -1,8 +1,8 @@
 // Package limiter provides per-user bandwidth rate limiting backed by a
 // token-bucket registry keyed on the Xray user email
 // ("<inboundTag>|<uid>|<uuid>"). Builder maintains the registry when user
-// lists change; Dispatcher consults it at connection setup to wrap the
-// data links.
+// lists change; Dispatcher consults it while transferring data so existing
+// connections observe updated limits.
 //
 // One bucket per user is shared across uplink and downlink, so a user
 // limit of N Mbps is a cap on total throughput in either direction,
@@ -31,7 +31,7 @@ var (
 
 // Set registers the per-user speed limit. mbps <= 0 is treated as "no limit"
 // and removes any existing entry. If the limit is unchanged the bucket is
-// left alone so in-flight connections keep a stable rate.
+// left alone to preserve the shared token balance.
 func Set(email string, mbps int) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -57,8 +57,8 @@ func Remove(email string) {
 }
 
 // Bucket returns the bucket for the user, or nil if the user has no limit.
-// Callers should cache the returned value for the lifetime of a connection
-// rather than looking it up per packet.
+// Callers must not cache it for the lifetime of a connection. Use Wait for
+// bounded reservations that observe runtime changes and cancellation.
 func Bucket(email string) *ratelimit.Bucket {
 	mu.RLock()
 	e, ok := buckets[email]

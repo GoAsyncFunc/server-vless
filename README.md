@@ -17,7 +17,7 @@ Optional runtime controls:
 | Flag | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `--fetch_users_interval` | `FETCH_USER_INTERVAL` | `60s` | User sync interval. |
-| `--report_traffics_interval` | `REPORT_TRAFFICS_INTERVAL` | `80s` | Traffic report interval. |
+| `--report_traffics_interval` | `REPORT_TRAFFICS_INTERVAL` | `80s` | Traffic report interval (capped at 120s for panel health; idle cycles send an empty push). |
 | `--heartbeat_interval` | `HEARTBEAT_INTERVAL` | `60s` | Online-user heartbeat interval. |
 | `--check_node_interval` | `CHECK_NODE_INTERVAL` | fetch interval | Node config polling interval. |
 | `--dns` | `DNS` | UniProxy/default DNS | Comma-separated DNS override. |
@@ -37,6 +37,8 @@ The code imports the UniProxy public facade at `github.com/GoAsyncFunc/uniproxy/
 ## Reload behavior
 
 User list changes and supported inbound-only node changes are refreshed by runtime polling. UniProxy route, DNS, and custom outbound changes require a process restart so the Xray core config is rebuilt consistently. When `ALLOW_PRIVATE_OUTBOUND=false`, panel-provided freedom outbounds may not override the node's private IP blocking policy with `ipsBlocked` or `finalRules`.
+
+Device limits are enforced per source IP for new connections, using local reservations and the panel's periodically refreshed `alivelist`. Cross-node counts are eventually consistent, not an atomic global quota. Speed changes apply to existing connections. See [runtime compatibility fixes and test boundaries](docs/panel-runtime-fixes.md).
 
 For systemd installs, the service starts `/usr/local/bin/vless-node`, matching Docker and release artifacts.
 
