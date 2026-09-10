@@ -30,13 +30,13 @@ Optional runtime controls:
 
 ## UniProxy compatibility
 
-The module currently pins `github.com/GoAsyncFunc/uniproxy v0.0.10`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
+The module currently pins `github.com/GoAsyncFunc/uniproxy v0.1.1`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
 
 The code imports the UniProxy public facade at `github.com/GoAsyncFunc/uniproxy/pkg`. If a future UniProxy release removes that facade or renames exported models, update the imports and API model references together.
 
 ## Reload behavior
 
-User list changes and supported inbound-only node changes are refreshed by runtime polling. UniProxy route, DNS, and custom outbound changes require a process restart so the Xray core config is rebuilt consistently. When `ALLOW_PRIVATE_OUTBOUND=false`, panel-provided freedom outbounds may not override the node's private IP blocking policy with `ipsBlocked`.
+User list changes and supported inbound-only node changes are refreshed by runtime polling. UniProxy route, DNS, and custom outbound changes require a process restart so the Xray core config is rebuilt consistently. When `ALLOW_PRIVATE_OUTBOUND=false`, panel-provided freedom outbounds may not override the node's private IP blocking policy with `ipsBlocked` or `finalRules`.
 
 For systemd installs, the service starts `/usr/local/bin/vless-node`, matching Docker and release artifacts.
 

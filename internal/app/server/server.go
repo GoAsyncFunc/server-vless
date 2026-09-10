@@ -54,7 +54,10 @@ type Server struct {
 }
 
 func New(config *Config, apiConfig *api.Config, serviceConfig *service.Config) (*Server, error) {
-	client := api.New(apiConfig)
+	client, err := api.NewWithError(apiConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create panel API client: %w", err)
+	}
 	return &Server{
 		config:        config,
 		apiClient:     client,
@@ -548,8 +551,8 @@ func validateRouteOutboundPolicy(route api.Route, outbound conf.OutboundDetourCo
 	}
 	for key := range settings {
 		normalizedKey := strings.ToLower(strings.ReplaceAll(key, "_", ""))
-		if normalizedKey == "ipsblocked" {
-			return fmt.Errorf("route %d freedom outbound ipsBlocked cannot be set when private outbound is disabled", route.Id)
+		if normalizedKey == "ipsblocked" || normalizedKey == "finalrules" {
+			return fmt.Errorf("route %d freedom outbound ipsBlocked/finalRules cannot be set when private outbound is disabled", route.Id)
 		}
 	}
 	return nil

@@ -207,7 +207,7 @@ func (d *DefaultDispatcher) userCounter(email string, enabled bool, direction st
 		return nil
 	}
 	name := "user>>>" + email + ">>>traffic>>>" + direction
-	c, _ := stats.GetOrRegisterCounter(d.stats, name)
+	c, _ := d.stats.GetOrRegisterCounter(name)
 	return c
 }
 
@@ -219,7 +219,7 @@ func (d *DefaultDispatcher) trackUserOnline(ctx context.Context, sessionInbound 
 
 func trackOnlineIP(ctx context.Context, sm stats.Manager, email, ip string) {
 	name := "user>>>" + email + ">>>online"
-	if om, _ := stats.GetOrRegisterOnlineMap(sm, name); om != nil {
+	if om, _ := sm.GetOrRegisterOnlineMap(name); om != nil {
 		om.AddIP(ip)
 		context.AfterFunc(ctx, func() { om.RemoveIP(ip) })
 	}

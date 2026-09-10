@@ -22,10 +22,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: '1.27'
           check-latest: true
 
-      # golangci-lint does not yet support Go 1.26
+      # Re-enable after verifying golangci-lint compatibility with Go 1.27
       # - name: golangci-lint
       #   uses: golangci/golangci-lint-action@v6
       #   with:

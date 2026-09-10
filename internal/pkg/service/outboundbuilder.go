@@ -54,16 +54,19 @@ func OutboundBuilder(config *Config, _ *api.NodeInfo) (*core.OutboundHandlerConf
 		domainStrategy = "UseIPv4v6"
 	}
 
-	settings := map[string]interface{}{
-		"domainStrategy": domainStrategy,
+	outboundDetourConfig.StreamSetting = &conf.StreamConfig{
+		SocketSettings: &conf.SocketConfig{DomainStrategy: domainStrategy},
 	}
-	if config == nil || !config.AllowPrivateOutbound {
-		settings["finalRules"] = []map[string]interface{}{
-			{
-				"action": "block",
-				"ip":     privateOutboundCIDRs,
-			},
-		}
+	settings := map[string]interface{}{}
+	action := "block"
+	if config != nil && config.AllowPrivateOutbound {
+		// Recent Xray versions apply an implicit private-IP block for VLESS
+		// even when finalRules is empty. Explicitly override it only when
+		// the operator opts in; the default remains private-IP blocking.
+		action = "allow"
+	}
+	settings["finalRules"] = []map[string]interface{}{
+		{"action": action, "ip": privateOutboundCIDRs},
 	}
 	settingsBytes, err := json.Marshal(settings)
 	if err != nil {

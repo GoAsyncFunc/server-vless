@@ -9,6 +9,18 @@ import (
 	"github.com/xtls/xray-core/common/platform"
 )
 
+func TestNewRejectsInvalidAPIConfig(t *testing.T) {
+	for _, cfg := range []*api.Config{
+		nil,
+		{APIHost: "http://panel.example.invalid", NodeID: 1, Key: "test", NodeType: "vless"},
+	} {
+		s, err := New(&Config{}, cfg, nil)
+		if err == nil || s != nil {
+			t.Fatal("invalid API config must return an error instead of a server with a nil client")
+		}
+	}
+}
+
 func TestApplyAssetDir(t *testing.T) {
 	t.Setenv(platform.AssetLocation, "")
 	if err := applyAssetDir(" /tmp/server-vless-assets "); err != nil {
@@ -184,6 +196,9 @@ func TestBuildRouteConfigRejectsPrivateBypassWhenPrivateOutboundDisabled(t *test
 		{name: "lowercase", settings: `{"ipsblocked":[]}`},
 		{name: "mixed acronym", settings: `{"IPsBlocked":[]}`},
 		{name: "snake case", settings: `{"ips_blocked":[]}`},
+		{name: "final rules allow", settings: `{"finalRules":[{"action":"allow","ip":["geoip:private"]}]}`},
+		{name: "final rules case insensitive", settings: `{"FinalRules":[]}`},
+		{name: "final rules snake case", settings: `{"final_rules":[]}`},
 	}
 
 	for _, tt := range tests {

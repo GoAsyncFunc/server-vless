@@ -3,9 +3,29 @@ package service
 import (
 	"testing"
 
+	"github.com/xtls/xray-core/app/proxyman"
+	"github.com/xtls/xray-core/core"
 	freedom "github.com/xtls/xray-core/proxy/freedom"
 	"github.com/xtls/xray-core/transport/internet"
 )
+
+func assertOutboundDomainStrategy(t *testing.T, outbound *core.OutboundHandlerConfig, config *freedom.Config, want internet.DomainStrategy) {
+	t.Helper()
+	if config.DomainStrategy != internet.DomainStrategy_AS_IS {
+		t.Fatal("deprecated freedom.domainStrategy must not be set")
+	}
+	message, err := outbound.SenderSettings.GetInstance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := message.(*proxyman.SenderConfig)
+	if sender.StreamSettings == nil || sender.StreamSettings.SocketSettings == nil {
+		t.Fatal("missing outbound sockopt settings")
+	}
+	if got := sender.StreamSettings.SocketSettings.DomainStrategy; got != want {
+		t.Fatalf("sockopt domain strategy = %v, want %v", got, want)
+	}
+}
 
 func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
 	outbound, err := OutboundBuilder(&Config{}, nil)
@@ -20,9 +40,7 @@ func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
 	if !ok {
 		t.Fatalf("proxy settings type = %T, want *freedom.Config", message)
 	}
-	if got, want := config.DomainStrategy, internet.DomainStrategy_USE_IP46; got != want {
-		t.Fatalf("domain strategy = %v, want %v", got, want)
-	}
+	assertOutboundDomainStrategy(t, outbound, config, internet.DomainStrategy_USE_IP46)
 	if len(config.FinalRules) != 1 {
 		t.Fatalf("finalRules count = %d, want 1", len(config.FinalRules))
 	}
@@ -47,9 +65,7 @@ func TestOutboundBuilderNilConfigUsesDefaultDomainStrategy(t *testing.T) {
 	if !ok {
 		t.Fatalf("proxy settings type = %T, want *freedom.Config", message)
 	}
-	if got, want := config.DomainStrategy, internet.DomainStrategy_USE_IP46; got != want {
-		t.Fatalf("domain strategy = %v, want %v", got, want)
-	}
+	assertOutboundDomainStrategy(t, outbound, config, internet.DomainStrategy_USE_IP46)
 	if len(config.FinalRules) != 1 {
 		t.Fatalf("finalRules count = %d, want 1 for nil config", len(config.FinalRules))
 	}
@@ -71,7 +87,13 @@ func TestOutboundBuilderAllowsPrivateOutboundWhenEnabled(t *testing.T) {
 	if !ok {
 		t.Fatalf("proxy settings type = %T, want *freedom.Config", message)
 	}
-	if len(config.FinalRules) != 0 {
-		t.Fatalf("finalRules count = %d, want 0 when private outbound allowed", len(config.FinalRules))
+	if len(config.FinalRules) != 1 {
+		t.Fatalf("finalRules count = %d, want 1 explicit allow rule", len(config.FinalRules))
+	}
+	if config.FinalRules[0].Action != freedom.RuleAction_Allow {
+		t.Fatal("private outbound opt-in must override Xray's implicit block")
+	}
+	if got := len(config.FinalRules[0].Ip); got != len(privateOutboundCIDRs) {
+		t.Fatalf("allow rule IP count = %d, want %d", got, len(privateOutboundCIDRs))
 	}
 }
