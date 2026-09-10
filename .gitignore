@@ -5,6 +5,10 @@
 *.so
 *.dylib
 
+# Python tooling
+__pycache__/
+*.pyc
+
 # Logs
 *.log
 
