@@ -44,7 +44,11 @@ the original template's entire DNS/routing behavior.
    Mihomo defaults to TCP. Config parsing success does not detect this loss.
    Whether the specific Mihomo version supports a correctly encoded transport
    must be checked separately before choosing serialization versus filtering.
-2. REALITY emits public-key, short-id, servername, fingerprint and flow, but
+2. **Resolved in follow-up:** see `mihomo-reality-compatibility.md`. Setting
+   `reality-opts.support-x25519mlkem768: true` for the tested new server made
+   downloads and UDP pass; a wrong short ID remained rejected. The original
+   subscription test below is retained as the before-correction result.
+   REALITY emits public-key, short-id, servername, fingerprint and flow, but
    Mihomo logged REALITY authentication failed against the private Nginx TLS1.3
    target. Cause not isolated (target/client/core interaction). Previous Xray CLI
    tests are not a positive Mihomo control. Do not claim this is a panel-field bug
