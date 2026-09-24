@@ -307,17 +307,27 @@ func buildDNSConfig(cliDNS string, raw api.RawDNS) (*dns.Config, error) {
 		dc := &conf.DNSConfig{}
 		servers := make([]any, 0, len(raw.DNSMap))
 		for _, value := range raw.DNSMap {
+			entry := value
 			addr, _ := value["address"].(string)
 			if strings.Contains(addr, ":") && !strings.Contains(addr, "/") {
 				host, port, err := net.SplitHostPort(addr)
 				if err == nil {
 					if p, perr := strconv.ParseUint(port, 10, 16); perr == nil {
-						value["address"] = host
-						value["port"] = uint16(p)
+						// Copy before rewriting. raw.DNSMap is the panel
+						// snapshot shared with the stored node info, so
+						// mutating it in place would make the hot-reload
+						// comparison see a permanent difference and force a
+						// restart on every inbound change.
+						entry = make(map[string]any, len(value)+1)
+						for k, v := range value {
+							entry[k] = v
+						}
+						entry["address"] = host
+						entry["port"] = uint16(p)
 					}
 				}
 			}
-			servers = append(servers, value)
+			servers = append(servers, entry)
 		}
 		// DNSConfig.Servers is []*NameServerConfig; we need to go through JSON round-trip.
 		b, err := json.Marshal(map[string]any{"servers": servers})

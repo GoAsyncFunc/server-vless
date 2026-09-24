@@ -155,6 +155,39 @@ func TestBuildDNSConfigUsesDNSMapWhenJsonEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildDNSConfigDNSMapDoesNotMutateInput(t *testing.T) {
+	raw := api.RawDNS{
+		DNSMap: map[string]map[string]any{
+			"primary": {"address": "8.8.8.8:5353", "domains": []any{"example.com"}},
+			"plain":   {"address": "9.9.9.9"},
+		},
+	}
+	cfg, err := buildDNSConfig("", raw)
+	if err != nil {
+		t.Fatalf("buildDNSConfig returned error: %v", err)
+	}
+	if len(cfg.NameServer) != 2 {
+		t.Fatalf("name server count = %d, want 2", len(cfg.NameServer))
+	}
+
+	// raw.DNSMap is the panel snapshot shared with the stored node info. The
+	// hot-reload comparison reflects on it, so rewriting an entry in place
+	// would look like a permanent config change and force a restart.
+	primary := raw.DNSMap["primary"]
+	if got := primary["address"]; got != "8.8.8.8:5353" {
+		t.Fatalf("input address mutated to %v, want 8.8.8.8:5353", got)
+	}
+	if _, ok := primary["port"]; ok {
+		t.Fatalf("input gained a port key: %v", primary)
+	}
+	if got, ok := primary["domains"].([]any); !ok || len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("sibling keys lost from copied entry: %v", primary)
+	}
+	if got := raw.DNSMap["plain"]["address"]; got != "9.9.9.9" {
+		t.Fatalf("untouched entry mutated to %v", got)
+	}
+}
+
 func TestBuildDNSConfigDefaultWhenAllSourcesEmpty(t *testing.T) {
 	cfg, err := buildDNSConfig("", api.RawDNS{})
 	if err != nil {
