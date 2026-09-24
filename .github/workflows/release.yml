@@ -31,6 +31,9 @@ jobs:
       - name: Run tests
         run: go test -v ./...
 
+      - name: Fetch geo data
+        run: sh build/package/fetch-geo-assets.sh "$RUNNER_TEMP/geo"
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -43,6 +46,24 @@ jobs:
             BINARY_NAME=${BINARY_NAME}.exe
           fi
           go build -v -trimpath -ldflags "-s -w -X main.Version=${{ github.ref_name }}" -o build/${BINARY_NAME} ./cmd/server
+
+      # The tarball is the self-contained form: geoip.dat is required for the
+      # node to start, so a bare binary without it is not a complete install.
+      # The bare binary stays in the release for existing install scripts.
+      - name: Package
+        run: |
+          BINARY_NAME=vless-node-${{ matrix.goos }}-${{ matrix.goarch }}
+          EXE=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=${BINARY_NAME}.exe
+            EXE=".exe"
+          fi
+          pkg="vless-node-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "${pkg}"
+          cp "build/${BINARY_NAME}" "${pkg}/vless-node${EXE}"
+          cp "$RUNNER_TEMP/geo/geoip.dat" "$RUNNER_TEMP/geo/geosite.dat" "${pkg}/"
+          tar -czf "build/${pkg}.tar.gz" "${pkg}"
+          rm -rf "${pkg}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

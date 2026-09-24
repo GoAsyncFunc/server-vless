@@ -107,6 +107,9 @@ func (s *Server) Start() error {
 	if err := applyAssetDir(s.config.AssetDir); err != nil {
 		return err
 	}
+	if err := checkGeoIPAsset(); err != nil {
+		return err
+	}
 
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	ctx := s.ctx
@@ -167,12 +170,12 @@ func (s *Server) Start() error {
 
 	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig, nodeConfig)
 	if err != nil {
-		return fmt.Errorf("build outbound config error: %s", err)
+		return fmt.Errorf("build outbound config error: %s", annotateGeoAssetError(err))
 	}
 
 	pbConfig, err := s.loadCore(inboundHandlerConfig, outboundHandlerConfig, nodeConfig)
 	if err != nil {
-		return fmt.Errorf("load core config error: %s", err)
+		return fmt.Errorf("load core config error: %s", annotateGeoAssetError(err))
 	}
 
 	instance, err := core.New(pbConfig)
@@ -212,6 +215,71 @@ func applyAssetDir(assetDir string) error {
 		return fmt.Errorf("set asset dir: %w", err)
 	}
 	return nil
+}
+
+const (
+	geoIPAsset   = "geoip.dat"
+	geoSiteAsset = "geosite.dat"
+)
+
+// checkGeoIPAsset fails fast when geoip.dat is unreadable.
+//
+// The direct egress always carries a "geoip:private" final rule, and Xray
+// resolves that attribute by opening geoip.dat while building the outbound, so
+// every start needs the file even when no route names a geoip code. Without
+// this check the failure surfaces as a bare "failed to open geoip.dat" from
+// deep inside config building, with no hint of where the file was expected.
+//
+// geosite.dat is not checked here: it is only read when a route or the panel
+// DNS names a "geosite:" attribute, so requiring it unconditionally would break
+// installs that never use one. A missing geosite.dat is reported by
+// annotateGeoAssetError at the point Xray actually asks for it.
+func checkGeoIPAsset() error {
+	return checkGeoIPAssetAt(platform.GetAssetLocation(geoIPAsset))
+}
+
+// checkGeoIPAssetAt holds the checks for a path already resolved through
+// platform.GetAssetLocation, so tests can exercise them without depending on
+// whichever system asset directories happen to exist on the host.
+func checkGeoIPAssetAt(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s is required but not readable at %s; place it next to the binary or point --asset-dir at the directory that holds it (release archives ship %s beside the binary): %w", geoIPAsset, path, geoIPAsset, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s at %s is not a regular file", geoIPAsset, path)
+	}
+	// os.Stat succeeds on a file the process cannot read, so probe a real open
+	// the way Xray will.
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("%s at %s cannot be opened: %w", geoIPAsset, path, err)
+	}
+	return f.Close()
+}
+
+// annotateGeoAssetError appends a fix hint when err is Xray reporting a geo
+// data file it could not open or a code it could not find in one. Both come out
+// of config building with no mention of the asset directory, which leaves the
+// operator guessing. Errors that do not concern a geo asset are returned as-is.
+func annotateGeoAssetError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	for _, name := range []string{geoIPAsset, geoSiteAsset} {
+		var hint string
+		switch {
+		case strings.Contains(msg, "failed to open "+name):
+			hint = fmt.Sprintf("install %s in the Xray asset directory, or point --asset-dir at the directory that holds it (release archives ship %s beside the binary)", name, name)
+		case strings.Contains(msg, "failed to check code") && strings.Contains(msg, "from "+name):
+			hint = fmt.Sprintf("the requested code is not present in %s; update the file or choose a code it provides", name)
+		}
+		if hint != "" {
+			return fmt.Errorf("%w\n  hint: %s", err, hint)
+		}
+	}
+	return err
 }
 
 func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConfig *core.OutboundHandlerConfig, nodeInfo *api.NodeInfo) (*core.Config, error) {

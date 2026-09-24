@@ -26,6 +26,8 @@ Optional runtime controls:
 | `--allow-private-outbound` | `ALLOW_PRIVATE_OUTBOUND` | `false` | Allow outbound access to private and loopback destinations. |
 | `--domain_strategy` | `DOMAIN_STRATEGY` | `UseIPv4v6` | Freedom outbound domain strategy. |
 
+`geoip.dat` is required: the direct egress blocks private destinations with Xray's `geoip:private` attribute, so the node refuses to start when the file cannot be read. `geosite.dat` is only needed when a route or the panel DNS uses a `geosite:` attribute, and its absence is reported when such a route is built. Both files are resolved from `--asset-dir`, then the executable directory, then `/usr/local/share/xray/`, `/usr/share/xray/`, and `/opt/share/xray/`; release archives ship both beside the binary.
+
 `configs/conf.yaml` is an example-only file. The current `cmd/server` entrypoint does not load it; runtime settings come from CLI/env flags and UniProxy panel data.
 
 ## UniProxy compatibility
@@ -42,3 +44,8 @@ Device limits are enforced per source IP for new connections, using local reserv
 
 For systemd installs, the service starts `/usr/local/bin/vless-node`, matching Docker and release artifacts.
 
+## Release artifacts
+
+Each tag publishes `vless-node-<os>-<arch>.tar.gz`, which contains `vless-node`, `geoip.dat`, and `geosite.dat` — unpack it into one directory and the node finds its assets without extra flags. The bare `vless-node-<os>-<arch>` binary is published alongside it for existing install scripts; those installs must supply `geoip.dat` themselves (see `--asset-dir` above). The Docker image already carries both files under `/usr/local/share/xray/`.
+
+Both geo files are downloaded and sha256-verified at build time by `build/package/fetch-geo-assets.sh`, which the release workflow and the Dockerfile share.

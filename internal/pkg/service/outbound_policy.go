@@ -33,7 +33,7 @@ func ApplyPrivateOutboundOptIn(outbound *conf.OutboundDetourConfig) error {
 			delete(settings, key)
 		}
 	}
-	rule, err := json.Marshal(map[string]any{"action": "allow", "ip": privateOutboundCIDRs})
+	rule, err := json.Marshal(map[string]any{"action": "allow", "ip": []string{privateIPRule}})
 	if err != nil {
 		return err
 	}

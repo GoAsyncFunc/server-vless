@@ -74,6 +74,7 @@ func TestBuildRouteConfigBlockActionsWithEmptyMatchesDoNotAllocateBlock(t *testi
 
 func TestBuildRouteConfigPolicyAllowsIpsBlockedWhenPrivateOutboundEnabled(t *testing.T) {
 	// When private outbound is allowed, ipsBlocked freedom config must pass.
+	useGeoAssets(t)
 	_, err := buildRouteConfigWithPolicy([]api.Route{
 		{Id: 1, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"direct-private","protocol":"freedom","settings":{"ipsBlocked":[]}}`},
 	}, api.Rules{}, true)

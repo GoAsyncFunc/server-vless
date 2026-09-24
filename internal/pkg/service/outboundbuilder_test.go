@@ -28,6 +28,7 @@ func assertOutboundDomainStrategy(t *testing.T, outbound *core.OutboundHandlerCo
 }
 
 func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
+	useGeoAssets(t)
 	outbound, err := OutboundBuilder(&Config{}, nil)
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
@@ -47,12 +48,11 @@ func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
 	if got := config.FinalRules[0].Action; got != freedom.RuleAction_Block {
 		t.Fatalf("finalRules[0].Action = %v, want Block", got)
 	}
-	if got, want := len(config.FinalRules[0].Ip), len(privateOutboundCIDRs); got != want {
-		t.Fatalf("finalRules[0].Ip count = %d, want %d", got, want)
-	}
+	assertPrivateIPRule(t, config.FinalRules[0].Ip)
 }
 
 func TestOutboundBuilderNilConfigUsesDefaultDomainStrategy(t *testing.T) {
+	useGeoAssets(t)
 	outbound, err := OutboundBuilder(nil, nil)
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
@@ -75,6 +75,7 @@ func TestOutboundBuilderNilConfigUsesDefaultDomainStrategy(t *testing.T) {
 }
 
 func TestOutboundBuilderAllowsPrivateOutboundWhenEnabled(t *testing.T) {
+	useGeoAssets(t)
 	outbound, err := OutboundBuilder(&Config{AllowPrivateOutbound: true}, nil)
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
@@ -93,7 +94,5 @@ func TestOutboundBuilderAllowsPrivateOutboundWhenEnabled(t *testing.T) {
 	if config.FinalRules[0].Action != freedom.RuleAction_Allow {
 		t.Fatal("private outbound opt-in must override Xray's implicit block")
 	}
-	if got := len(config.FinalRules[0].Ip); got != len(privateOutboundCIDRs) {
-		t.Fatalf("allow rule IP count = %d, want %d", got, len(privateOutboundCIDRs))
-	}
+	assertPrivateIPRule(t, config.FinalRules[0].Ip)
 }

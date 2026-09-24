@@ -8,35 +8,19 @@ import (
 	"github.com/xtls/xray-core/infra/conf"
 )
 
-// privateOutboundCIDRs lists CIDR ranges treated as "private" for outbound
-// blocking. Equivalent to xray-core's "geoip:private" alias but expressed
-// inline so we do not depend on geoip.dat being available when freedom config
-// is parsed. Covers RFC1918, loopback, link-local, CGN, ULA, multicast,
-// reserved, documentation, and unspecified ranges. IPv4-mapped IPv6
-// (::ffff:0:0/96) is intentionally omitted because xray-core unwraps
-// IPv4-mapped addresses to native IPv4, so the IPv4 entries already match.
-var privateOutboundCIDRs = []string{
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"100.64.0.0/10",
-	"127.0.0.0/8",
-	"169.254.0.0/16",
-	"172.16.0.0/12",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"192.168.0.0/16",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"224.0.0.0/4",
-	"240.0.0.0/4",
-	"255.255.255.255/32",
-	"::/128",
-	"::1/128",
-	"2001:db8::/32",
-	"fc00::/7",
-	"fe80::/10",
-}
+// privateIPRule gates private and loopback destinations on the direct egress.
+// It is Xray's own "geoip:private" attribute, resolved from geoip.dat rather
+// than from a list maintained here.
+//
+// An inline CIDR list used to live here. It had drifted from the ranges Xray
+// treats as private, so under --allow-private-outbound destinations in
+// 192.88.99.0/24 and ff00::/8 stayed blocked: our allow rule did not match
+// them and Xray's implicit defaultBlockPrivateRule took over. Multicast was
+// also narrower (224.0.0.0/4 against Xray's /3). The one range the old list
+// blocked that geoip:private does not is the IPv6 documentation prefix
+// 2001:db8::/32, which is not routable. The trade is that geoip.dat is now a
+// hard runtime requirement; the release archives and the Docker image ship it.
+const privateIPRule = "geoip:private"
 
 // OutboundBuilder builds the freedom outbound handler used as the "direct"
 // egress. nodeInfo is reserved for future per-node outbound customization
@@ -58,15 +42,16 @@ func OutboundBuilder(config *Config, _ *api.NodeInfo) (*core.OutboundHandlerConf
 		SocketSettings: &conf.SocketConfig{DomainStrategy: domainStrategy},
 	}
 	settings := map[string]interface{}{}
+	// Emit the rule explicitly instead of leaning on Xray's implicit
+	// defaultBlockPrivateRule, so the block is not silently lost if upstream
+	// ever changes which inbounds receive it. Only --allow-private-outbound
+	// flips the action; the default stays blocking.
 	action := "block"
 	if config != nil && config.AllowPrivateOutbound {
-		// Recent Xray versions apply an implicit private-IP block for VLESS
-		// even when finalRules is empty. Explicitly override it only when
-		// the operator opts in; the default remains private-IP blocking.
 		action = "allow"
 	}
 	settings["finalRules"] = []map[string]interface{}{
-		{"action": action, "ip": privateOutboundCIDRs},
+		{"action": action, "ip": []string{privateIPRule}},
 	}
 	settingsBytes, err := json.Marshal(settings)
 	if err != nil {
