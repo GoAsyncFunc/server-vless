@@ -15,11 +15,13 @@ import (
 // An inline CIDR list used to live here. It had drifted from the ranges Xray
 // treats as private, so under --allow-private-outbound destinations in
 // 192.88.99.0/24 and ff00::/8 stayed blocked: our allow rule did not match
-// them and Xray's implicit defaultBlockPrivateRule took over. Multicast was
-// also narrower (224.0.0.0/4 against Xray's /3). The one range the old list
-// blocked that geoip:private does not is the IPv6 documentation prefix
-// 2001:db8::/32, which is not routable. The trade is that geoip.dat is now a
-// hard runtime requirement; the release archives and the Docker image ship it.
+// them and Xray's implicit defaultBlockPrivateRule took over. The remaining
+// differences are only notation -- the old 224.0.0.0/4 plus 240.0.0.0/4 plus
+// 255.255.255.255/32, and ::/128 plus ::1/128, cover exactly what Xray's
+// 224.0.0.0/3 and ::/127 cover. The one range the old list blocked that
+// geoip:private does not is the IPv6 documentation prefix 2001:db8::/32, which
+// is not routable. The trade is that geoip.dat is now a hard runtime
+// requirement; the release archives and the Docker image ship it.
 const privateIPRule = "geoip:private"
 
 // OutboundBuilder builds the freedom outbound handler used as the "direct"
