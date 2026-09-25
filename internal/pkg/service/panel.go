@@ -39,8 +39,10 @@ func NewPanelClient(config *api.Config) (*PanelClient, error) {
 	q.Set("token", config.Key)
 	u.RawQuery = q.Encode()
 	// Clone the default transport to inherit its connection pooling and proxy
-	// settings. http.DefaultTransport is a package-level variable that any
-	// importer can replace, so assert the type instead of panicking on it.
+	// settings. The constructor already rejects a DefaultTransport it cannot
+	// use, so this is redundant today; it stays because this function reads
+	// the package-level variable a second time, and reporting an error beats
+	// panicking if that read ever disagrees with the constructor's.
 	defaultTransport := http.DefaultTransport
 	baseTransport, ok := defaultTransport.(*http.Transport)
 	if !ok {

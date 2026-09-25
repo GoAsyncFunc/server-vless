@@ -35,17 +35,18 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// TestNewPanelClientRejectsNonTransportDefaultTransport guards the type
-// assertion on http.DefaultTransport: it used to be unchecked, so any importer
-// replacing that package-level variable turned NewPanelClient into a panic.
+// TestNewPanelClientRejectsNonTransportDefaultTransport pins the contract that
+// NewPanelClient reports an unusable http.DefaultTransport instead of
+// panicking on it. The variable is package-level, so any importer can replace
+// it out from under the client.
 //
-// APISendIP is set on purpose. With it empty, api.NewWithError reaches
-// uniproxy's own unchecked assertion first and panics there, so this test would
-// never exercise the assertion in NewPanelClient. uniproxy fixed that in
-// v0.1.2, but this module still pins v0.1.1.
+// Two layers check it: the assertion in NewPanelClient, and uniproxy's
+// constructor, which panicked on this until v0.1.2. The constructor runs first
+// and now returns an error, so this test guards the user-visible behaviour
+// rather than one particular check.
 func TestNewPanelClientRejectsNonTransportDefaultTransport(t *testing.T) {
 	config := func() *api.Config {
-		return &api.Config{APIHost: "http://127.0.0.1:1", NodeID: 1, NodeType: "vless", Key: "k", APISendIP: "127.0.0.1"}
+		return &api.Config{APIHost: "http://127.0.0.1:1", NodeID: 1, NodeType: "vless", Key: "k"}
 	}
 
 	// Control: the APISendIP path is otherwise healthy, so a later failure is
