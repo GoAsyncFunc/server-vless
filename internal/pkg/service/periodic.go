@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -31,9 +32,16 @@ func (p *periodic) Start() {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := p.Execute(); err != nil {
-					log.Warn("periodic task failed; retrying next interval")
-				}
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Errorf("periodic task panicked; retrying next interval: %v\n%s", r, debug.Stack())
+						}
+					}()
+					if err := p.Execute(); err != nil {
+						log.Warnf("periodic task failed; retrying next interval: %v", err)
+					}
+				}()
 				timer := time.NewTimer(p.Interval)
 				select {
 				case <-ctx.Done():
