@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"reflect"
@@ -186,6 +187,7 @@ func (b *Builder) fetchUsersMonitor() error {
 	defer b.mu.Unlock()
 
 	deleted, added := b.compareUserList(newUserList, b.userList)
+	var removeErr error
 	if len(deleted) > 0 {
 		deletedEmail := make([]string, len(deleted))
 		for i, u := range deleted {
@@ -193,15 +195,18 @@ func (b *Builder) fetchUsersMonitor() error {
 			deletedEmail[i] = email
 			b.retireUserLocked(email, u.Id)
 		}
-		if err := b.removeUsers(deletedEmail, b.inboundTag); err != nil {
-			log.Errorln(err)
-			// Continue to add users even if remove failed
+		removeErr = b.removeUsers(deletedEmail, b.inboundTag)
+		if removeErr != nil {
+			log.Errorf("failed to remove users; retaining previous user snapshot for retry: %v", removeErr)
 		}
 	}
 	// Reconcile against the actual handler even on 304/cached user lists;
 	// a previous partial apply must not become permanent cache divergence.
 	if err := b.addNewUser(newUserList); err != nil {
 		log.Errorln(err)
+		return nil
+	}
+	if removeErr != nil {
 		return nil
 	}
 	if len(deleted) > 0 || len(added) > 0 {
@@ -683,10 +688,23 @@ func (b *Builder) removeUsers(users []string, tag string) error {
 		return fmt.Errorf("inbound handler %s does not implement proxy.UserManager", tag)
 	}
 
+	return removeUsersFromManager(b.ctx, userManager, users)
+}
+
+func removeUsersFromManager(ctx context.Context, userManager proxy.UserManager, users []string) error {
+	var removeErrs []error
 	for _, email := range users {
-		if err := userManager.RemoveUser(b.ctx, email); err != nil {
-			log.Errorf("failed to remove user %s: %s", email, err)
+		if userManager.GetUser(ctx, email) == nil {
+			continue
+		}
+		if err := userManager.RemoveUser(ctx, email); err != nil {
+			// A concurrent remover may have completed the operation between
+			// GetUser and RemoveUser. Treat that converged state as success.
+			if userManager.GetUser(ctx, email) == nil {
+				continue
+			}
+			removeErrs = append(removeErrs, fmt.Errorf("remove user %q: %w", email, err))
 		}
 	}
-	return nil
+	return errors.Join(removeErrs...)
 }

@@ -17,6 +17,7 @@ import (
 	_ "github.com/xtls/xray-core/app/proxyman/inbound"
 	_ "github.com/xtls/xray-core/app/proxyman/outbound"
 	appstats "github.com/xtls/xray-core/app/stats"
+	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
@@ -380,6 +381,43 @@ func TestFetchUsersMonitorReplacesUserOnUuidChange(t *testing.T) {
 	}
 }
 
+func TestFetchUsersMonitorRetriesFailedDeletion(t *testing.T) {
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node, users: []api.UserInfo{{Id: 1, Uuid: testUuidA}}}
+	b := New(context.Background(), tag, instance, &Config{}, node, panel)
+	b.userList = append([]api.UserInfo(nil), panel.users...)
+	if err := b.addNewUser(b.userList); err != nil {
+		t.Fatal(err)
+	}
+	email := buildUserEmail(tag, 1, testUuidA)
+
+	panel.setUsers(nil, nil)
+	b.inboundTag = "missing-handler"
+	if err := b.fetchUsersMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Users(); len(got) != 1 || got[0].Uuid != testUuidA {
+		t.Fatalf("failed deletion must retain the old user snapshot: %v", got)
+	}
+	if emails := testUserEmails(t, instance, tag); len(emails) != 1 || emails[0] != email {
+		t.Fatalf("failed deletion must leave the Xray user registered: %v", emails)
+	}
+
+	// Restore the handler tag. The next poll must retry the deletion rather
+	// than treating the already-fetched empty panel list as applied.
+	b.inboundTag = tag
+	if err := b.fetchUsersMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Users(); len(got) != 0 {
+		t.Fatalf("successful retry must commit the empty user snapshot: %v", got)
+	}
+	if emails := testUserEmails(t, instance, tag); len(emails) != 0 {
+		t.Fatalf("successful retry must remove the Xray user: %v", emails)
+	}
+}
+
 func TestFetchUsersMonitorKeepsStateOnPanelError(t *testing.T) {
 	node := newTestNode(t)
 	instance, tag := newTestInstance(t, node)
@@ -455,13 +493,74 @@ func TestRemoveUsersReportsMissingHandler(t *testing.T) {
 	}
 }
 
+type fakeUserManager struct {
+	users      map[string]*protocol.MemoryUser
+	removeErrs map[string]error
+	removeCall []string
+}
+
+func (m *fakeUserManager) AddUser(_ context.Context, user *protocol.MemoryUser) error {
+	m.users[user.Email] = user
+	return nil
+}
+
+func (m *fakeUserManager) RemoveUser(_ context.Context, email string) error {
+	m.removeCall = append(m.removeCall, email)
+	if err := m.removeErrs[email]; err != nil {
+		return err
+	}
+	delete(m.users, email)
+	return nil
+}
+
+func (m *fakeUserManager) GetUser(_ context.Context, email string) *protocol.MemoryUser {
+	return m.users[email]
+}
+
+func (m *fakeUserManager) GetUsers(_ context.Context) []*protocol.MemoryUser {
+	users := make([]*protocol.MemoryUser, 0, len(m.users))
+	for _, user := range m.users {
+		users = append(users, user)
+	}
+	return users
+}
+
+func (m *fakeUserManager) GetUsersCount(_ context.Context) int64 {
+	return int64(len(m.users))
+}
+
+func TestRemoveUsersReturnsExistingUserErrorsAndContinues(t *testing.T) {
+	transient := errors.New("temporary removal failure")
+	manager := &fakeUserManager{
+		users: map[string]*protocol.MemoryUser{
+			"failed":  {Email: "failed"},
+			"removed": {Email: "removed"},
+		},
+		removeErrs: map[string]error{"failed": transient},
+	}
+
+	err := removeUsersFromManager(context.Background(), manager, []string{"failed", "removed", "unknown"})
+	if !errors.Is(err, transient) || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("error = %v, want the failed user's error and email", err)
+	}
+	if got := manager.removeCall; !slices.Equal(got, []string{"failed", "removed"}) {
+		t.Fatalf("remove calls = %v, want failed and removed only", got)
+	}
+	if manager.GetUser(context.Background(), "removed") != nil {
+		t.Fatal("successful removal did not remove the user")
+	}
+	if manager.GetUser(context.Background(), "failed") == nil {
+		t.Fatal("failed removal must leave the user for retry")
+	}
+}
+
 func TestRemoveUsersIsIdempotentForUnknownEmail(t *testing.T) {
 	node := newTestNode(t)
 	instance, tag := newTestInstance(t, node)
 	b := New(context.Background(), tag, instance, &Config{}, node, nil)
 
-	// Per-user removal failures are logged and swallowed: a user the handler
-	// never had must not fail the whole batch.
+	// A user the handler never had is already in the desired state and must
+	// not make the batch fail.
 	if err := b.removeUsers([]string{"never-registered"}, tag); err != nil {
 		t.Fatalf("unknown email should not fail the batch: %v", err)
 	}
