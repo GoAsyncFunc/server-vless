@@ -87,8 +87,19 @@ func (r *cachedReader) Interrupt() {
 		r.cache = buf.ReleaseMulti(r.cache)
 	}
 	r.Unlock()
-	// The error here is the wrapped reader's own close error; the reader is
-	// being torn down either way, so there is nothing to recover from.
+	// Best effort, and it only works on the Dispatch path, where r.reader is
+	// the link's *pipe.Reader and therefore Interruptible. On the DispatchLink
+	// path it cannot: r.reader is a buf.TimeoutWrapperReader, which embeds only
+	// the buf.Reader interface and so is neither Interruptible nor Closable,
+	// and the reader underneath it (buf.NewReader's *SingleReader/*ReadVReader,
+	// or proxy.VisionReader for vision flow) is not interruptible either. The
+	// call still costs nothing and stays correct for any inbound that does
+	// hand us an interruptible reader.
+	//
+	// Leaving the read pending is harmless. ReadMultiBufferTimeout's goroutine
+	// is normally joined by the next ReadMultiBuffer, and when the reader is
+	// dropped instead, the TCP worker closes the connection right after, which
+	// is what actually unblocks the read.
 	_ = common.Interrupt(r.reader)
 }
 
@@ -278,6 +289,11 @@ func (s *Sniffer) Sniff(c context.Context, payload []byte, network net.Network) 
 	return nil, errUnknownContent
 }
 
+// ensureTimeoutReader adapts a reader that cannot time out its own reads.
+// The wrapper it returns is not interruptible -- buf.TimeoutWrapperReader
+// embeds only the buf.Reader interface -- which is the reason interrupts stop
+// at this layer on the DispatchLink path. See cachedReader.Interrupt for why
+// that is acceptable rather than something to work around.
 func ensureTimeoutReader(reader buf.Reader) buf.TimeoutReader {
 	if timeoutReader, ok := reader.(buf.TimeoutReader); ok {
 		return timeoutReader
