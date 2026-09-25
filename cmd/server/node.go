@@ -139,7 +139,7 @@ func appFlags() []cli.Flag {
 		},
 		&cli.StringFlag{
 			Name:        "domain_strategy, ds",
-			Usage:       "Freedom outbound domain strategy (AsIs|UseIP|UseIPv4v6|UseIPv6|UseIPv4v6v6)",
+			Usage:       "Freedom outbound domain strategy. One of AsIs, UseIP, UseIPv4, UseIPv6, UseIPv4v6, UseIPv6v4, ForceIP, ForceIPv4, ForceIPv6, ForceIPv4v6, ForceIPv6v4. An unsupported value makes the node fail to start.",
 			EnvVars:     []string{"DOMAIN_STRATEGY"},
 			Value:       "UseIPv4v6",
 			DefaultText: "UseIPv4v6",

@@ -38,7 +38,15 @@ func NewPanelClient(config *api.Config) (*PanelClient, error) {
 	q.Set("node_type", client.NodeType)
 	q.Set("token", config.Key)
 	u.RawQuery = q.Encode()
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Clone the default transport to inherit its connection pooling and proxy
+	// settings. http.DefaultTransport is a package-level variable that any
+	// importer can replace, so assert the type instead of panicking on it.
+	defaultTransport := http.DefaultTransport
+	baseTransport, ok := defaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("http.DefaultTransport is %T, not *http.Transport; cannot clone it for the panel client", defaultTransport)
+	}
+	transport := baseTransport.Clone()
 	if config.APISendIP != "" {
 		dialer := &net.Dialer{Timeout: 30 * time.Second, LocalAddr: &net.TCPAddr{IP: net.ParseIP(config.APISendIP)}}
 		transport.DialContext = dialer.DialContext

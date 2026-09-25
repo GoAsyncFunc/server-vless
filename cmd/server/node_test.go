@@ -6,6 +6,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	cli "github.com/urfave/cli/v2"
+	"github.com/xtls/xray-core/infra/conf"
 
 	"github.com/GoAsyncFunc/server-vless/internal/app/server"
 )
@@ -271,4 +272,86 @@ func TestRecoverPanicToleratesNilCloserAndErrPtr(t *testing.T) {
 		defer recoverPanic(nil, nil)
 		panic("nil-deps")
 	}()
+}
+
+// acceptedDomainStrategies mirrors the values Xray's freedom outbound accepts
+// (infra/conf/freedom.go, matched case-insensitively). The flag usage is the
+// only place users learn them, and an unsupported value aborts startup, so the
+// two are asserted against each other here.
+var acceptedDomainStrategies = []string{
+	"AsIs",
+	"UseIP",
+	"UseIPv4",
+	"UseIPv6",
+	"UseIPv4v6",
+	"UseIPv6v4",
+	"ForceIP",
+	"ForceIPv4",
+	"ForceIPv6",
+	"ForceIPv4v6",
+	"ForceIPv6v4",
+}
+
+// domainStrategyFlagUsage returns the usage text of the --domain_strategy flag.
+func domainStrategyFlagUsage(t *testing.T) string {
+	t.Helper()
+	for _, f := range appFlags() {
+		stringFlag, ok := f.(*cli.StringFlag)
+		if !ok {
+			continue
+		}
+		for _, name := range stringFlag.Names() {
+			if name == "domain_strategy" {
+				return stringFlag.Usage
+			}
+		}
+	}
+	t.Fatal("appFlags() has no domain_strategy flag")
+	return ""
+}
+
+// TestDomainStrategyUsageMatchesXray is the regression guard for a usage string
+// that advertised "UseIPv4v6v6", which Xray rejects: copying it out of --help
+// made the node fail at startup with "unsupported domain strategy".
+func TestDomainStrategyUsageMatchesXray(t *testing.T) {
+	usage := domainStrategyFlagUsage(t)
+
+	const marker = "One of "
+	start := strings.Index(usage, marker)
+	if start < 0 {
+		t.Fatalf("usage %q does not list the accepted values after %q", usage, marker)
+	}
+	rest := usage[start+len(marker):]
+	end := strings.Index(rest, ".")
+	if end < 0 {
+		t.Fatalf("usage %q does not terminate the value list with a period", usage)
+	}
+	listed := strings.Split(rest[:end], ", ")
+
+	if len(listed) != len(acceptedDomainStrategies) {
+		t.Errorf("usage lists %d values, want %d: %v", len(listed), len(acceptedDomainStrategies), listed)
+	}
+	want := make(map[string]struct{}, len(acceptedDomainStrategies))
+	for _, s := range acceptedDomainStrategies {
+		want[s] = struct{}{}
+	}
+	for _, s := range listed {
+		if _, ok := want[s]; !ok {
+			t.Errorf("usage advertises %q, which is not an accepted strategy", s)
+		}
+		delete(want, s)
+	}
+	for s := range want {
+		t.Errorf("usage omits the accepted strategy %q", s)
+	}
+
+	// The list is only trustworthy if Xray still accepts every entry.
+	for _, s := range acceptedDomainStrategies {
+		if _, err := (&conf.FreedomConfig{TargetStrategy: s}).Build(); err != nil {
+			t.Errorf("xray rejects %q: %v", s, err)
+		}
+	}
+	if _, err := (&conf.FreedomConfig{TargetStrategy: "UseIPv4v6v6"}).Build(); err == nil {
+		t.Error("xray accepted UseIPv4v6v6; the guard assumes it is invalid")
+	}
 }
