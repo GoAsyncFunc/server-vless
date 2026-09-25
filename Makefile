@@ -31,5 +31,24 @@ lint:
 lint_install:
 	go install -v github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
+# GitHub Actions workflow files. There is no official actionlint action, so CI
+# calls these targets rather than repeating the version -- the pin below is the
+# only one in the tree. `go install` also gets the binary verified through the
+# module proxy and checksum database; actionlint's own download script does not
+# check a hash, and it fetches itself from `main`.
+#
+# shellcheck is used automatically when it is on PATH. ubuntu-latest (what CI
+# runs on) ships it; a bare macOS box does not, so locally this checks the
+# workflow YAML but not the shell inside `run:` blocks. `brew install
+# shellcheck` closes that gap.
+ACTIONLINT_VERSION ?= v1.7.12
+ACTIONLINT ?= $(firstword $(wildcard $(shell go env GOPATH)/bin/actionlint) actionlint)
+
+actionlint:
+	@$(ACTIONLINT) -color .github/workflows/*.yml
+
+actionlint_install:
+	go install -v github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
 test:
 	go test ./...

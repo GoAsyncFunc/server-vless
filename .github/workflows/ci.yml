@@ -67,3 +67,27 @@ jobs:
 
       - name: Build
         run: go build -v ./...
+
+  workflow-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          check-latest: true
+
+      # actionlint ships no GitHub Action, so this goes through the Makefile
+      # instead of repeating the version here. shellcheck is preinstalled on
+      # this runner, which means actionlint also checks the shell in every
+      # `run:` block -- that is the stronger half of the check and it does not
+      # run on a developer machine without shellcheck installed.
+      - name: Install actionlint
+        run: make actionlint_install
+
+      - name: Check workflow files
+        run: make actionlint
