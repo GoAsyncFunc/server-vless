@@ -18,7 +18,7 @@ func (b *Builder) syncDeviceLimits() {
 }
 
 func (b *Builder) syncDeviceLimitsLocked() {
-	b.mu.RLock()
+	b.mu.Lock()
 	needed := false
 	for _, u := range b.userList {
 		if u.DeviceLimit > 0 {
@@ -26,7 +26,18 @@ func (b *Builder) syncDeviceLimitsLocked() {
 			break
 		}
 	}
-	b.mu.RUnlock()
+	// Expire local credits even when no user has a device limit. heartbeatMonitor
+	// records a reported-IP entry for every online user regardless of the limit,
+	// so gating this on `needed` would let both maps grow for the lifetime of the
+	// process on any node that never enables the device limit.
+	for uid, at := range b.lastReportedAt {
+		if time.Since(at) >= localDeviceCreditTTL {
+			delete(b.lastReportedAt, uid)
+			delete(b.lastReportedIPs, uid)
+		}
+	}
+	b.mu.Unlock()
+
 	if !needed {
 		return
 	}
@@ -37,12 +48,6 @@ func (b *Builder) syncDeviceLimitsLocked() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for uid, at := range b.lastReportedAt {
-		if time.Since(at) >= localDeviceCreditTTL {
-			delete(b.lastReportedAt, uid)
-			delete(b.lastReportedIPs, uid)
-		}
-	}
 	for _, u := range b.userList {
 		email := buildUserEmail(b.inboundTag, u.Id, u.Uuid)
 		limiter.SetDeviceLimit(email, u.DeviceLimit)

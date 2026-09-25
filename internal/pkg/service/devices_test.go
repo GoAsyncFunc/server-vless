@@ -53,3 +53,41 @@ func TestPanelDeviceCountsEnforceAdmission(t *testing.T) {
 		t.Fatal("expired metadata not removed")
 	}
 }
+
+// heartbeatMonitor records a reported-IP entry for every online user whether or
+// not any user has a device limit, so credit expiry must not be gated on the
+// limit being enabled -- otherwise both maps grow for the process lifetime.
+func TestLocalDeviceCreditsExpireWithoutDeviceLimit(t *testing.T) {
+	panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("panel must not be queried when no user has a device limit, got %s", r.URL.Path)
+	}))
+	defer panel.Close()
+	c, e := NewPanelClient(&api.Config{APIHost: panel.URL, NodeID: 1, NodeType: "vless", Key: "test"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	b := &Builder{
+		apiClient:       c,
+		ctx:             context.Background(),
+		inboundTag:      "vless_test",
+		userList:        []api.UserInfo{{Id: 1, Uuid: "test"}}, // DeviceLimit == 0
+		lastReportedIPs: map[int][]string{1: {"192.0.2.1"}, 2: {"192.0.2.2"}},
+		lastReportedAt: map[int]time.Time{
+			1: time.Now().Add(-localDeviceCreditTTL - time.Second), // expired
+			2: time.Now(),                                          // still fresh
+		},
+	}
+	b.syncDeviceLimits()
+	if _, ok := b.lastReportedAt[1]; ok {
+		t.Error("expired timestamp kept without a device limit")
+	}
+	if _, ok := b.lastReportedIPs[1]; ok {
+		t.Error("expired ips kept without a device limit")
+	}
+	if _, ok := b.lastReportedAt[2]; !ok {
+		t.Error("fresh timestamp dropped")
+	}
+	if _, ok := b.lastReportedIPs[2]; !ok {
+		t.Error("fresh ips dropped")
+	}
+}
