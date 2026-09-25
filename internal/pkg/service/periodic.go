@@ -18,7 +18,9 @@ type periodic struct {
 	done     chan struct{}
 }
 
-func (p *periodic) Start() error {
+// Start launches the worker. It cannot fail: the first call wins via sync.Once
+// and every later call is a no-op, so there is no error to report.
+func (p *periodic) Start() {
 	p.once.Do(func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		p.cancel = cancel
@@ -42,13 +44,14 @@ func (p *periodic) Start() error {
 			}
 		}()
 	})
-	return nil
 }
+
 func (p *periodic) Stop() {
 	if p != nil && p.cancel != nil {
 		p.cancel()
 	}
 }
+
 func (p *periodic) Wait(ctx context.Context) error {
 	if p == nil || p.done == nil {
 		return nil

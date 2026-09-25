@@ -1,9 +1,10 @@
 package service
 
 import (
+	"time"
+
 	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 	log "github.com/sirupsen/logrus"
-	"time"
 )
 
 // The reference panel removes per-node entries after 100 seconds. Use a

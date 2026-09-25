@@ -35,7 +35,10 @@ func NewPanelClient(config *api.Config) (*PanelClient, error) {
 	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/server/UniProxy/push"
 	q := u.Query()
 	q.Set("node_id", strconv.Itoa(config.NodeID))
-	q.Set("node_type", client.NodeType)
+	// Not api.Client.NodeType: that field is deprecated. server-vless is
+	// vless-only -- node.go pins api.Vless, which is already the normalized
+	// spelling -- so the value we validated is the one the client would report.
+	q.Set("node_type", config.NodeType)
 	q.Set("token", config.Key)
 	u.RawQuery = q.Encode()
 	// Clone the default transport to inherit its connection pooling and proxy

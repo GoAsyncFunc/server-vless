@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	stderrors "errors"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -86,7 +87,9 @@ func (r *cachedReader) Interrupt() {
 		r.cache = buf.ReleaseMulti(r.cache)
 	}
 	r.Unlock()
-	common.Interrupt(r.reader)
+	// The error here is the wrapped reader's own close error; the reader is
+	// being torn down either way, so there is nothing to recover from.
+	_ = common.Interrupt(r.reader)
 }
 
 // DefaultDispatcher is a default implementation of Dispatcher.
@@ -256,11 +259,11 @@ func (s *Sniffer) Sniff(c context.Context, payload []byte, network net.Network) 
 			continue
 		}
 		result, err := si.protocolSniffer(c, payload)
-		if err == common.ErrNoClue {
+		if stderrors.Is(err, common.ErrNoClue) {
 			pendingSniffers = append(pendingSniffers, si)
 			continue
 		}
-		if err == protocol.ErrProtoNeedMoreData {
+		if stderrors.Is(err, protocol.ErrProtoNeedMoreData) {
 			s.sniffers = []protocolSnifferWithNetwork{si}
 			return nil, err
 		}
@@ -324,10 +327,10 @@ func sniffer(ctx context.Context, cReader *cachedReader, network net.Network) (S
 
 			if !payload.IsEmpty() {
 				result, err := sniffer.Sniff(ctx, payload.Bytes(), network)
-				switch err {
-				case common.ErrNoClue:
+				switch {
+				case stderrors.Is(err, common.ErrNoClue):
 					totalAttempt++
-				case protocol.ErrProtoNeedMoreData:
+				case stderrors.Is(err, protocol.ErrProtoNeedMoreData):
 				default:
 					return result, err
 				}
@@ -395,7 +398,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 				errors.LogError(ctx, "CustomDispatcher: panic in routedDispatch: ",
 					r, "\n", string(debug.Stack()))
 				common.Close(outbound.Writer)
-				common.Interrupt(outbound.Reader)
+				_ = common.Interrupt(outbound.Reader)
 			}
 		}()
 		outbound.Reader, destination = d.sniffDestination(ctx, outbound.Reader, destination, ob, content)
@@ -429,7 +432,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 	release, err := reserveDevice(ctx)
 	if err != nil {
 		common.Close(outbound.Writer)
-		common.Interrupt(outbound.Reader)
+		_ = common.Interrupt(outbound.Reader)
 		return err
 	}
 	defer release()
@@ -443,7 +446,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			errors.LogError(ctx, "CustomDispatcher: panic in DispatchLink routedDispatch: ",
 				r, "\n", string(debug.Stack()))
 			common.Close(outbound.Writer)
-			common.Interrupt(outbound.Reader)
+			_ = common.Interrupt(outbound.Reader)
 		}
 	}()
 	d.routedDispatch(ctx, outbound, destination)
@@ -477,7 +480,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		} else {
 			errors.LogError(ctx, "CustomDispatcher: non existing tag for platform initialized detour: ", forcedOutboundTag)
 			common.Close(link.Writer)
-			common.Interrupt(link.Reader)
+			_ = common.Interrupt(link.Reader)
 			return
 		}
 	} else if d.router != nil {
@@ -490,7 +493,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			} else {
 				errors.LogWarning(ctx, "CustomDispatcher: non existing outTag: ", outTag)
 				common.Close(link.Writer)
-				common.Interrupt(link.Reader)
+				_ = common.Interrupt(link.Reader)
 				return
 			}
 		} else {
@@ -505,7 +508,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	if handler == nil {
 		errors.LogInfo(ctx, "CustomDispatcher: default outbound handler not exist")
 		common.Close(link.Writer)
-		common.Interrupt(link.Reader)
+		_ = common.Interrupt(link.Reader)
 		return
 	}
 
@@ -548,7 +551,7 @@ func (w *SizeStatWriter) Close() error {
 }
 
 func (w *SizeStatWriter) Interrupt() {
-	common.Interrupt(w.Writer)
+	_ = common.Interrupt(w.Writer)
 }
 
 // Stats Reader
@@ -566,7 +569,7 @@ func (r *SizeStatReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 }
 
 func (r *SizeStatReader) Interrupt() {
-	common.Interrupt(r.Reader)
+	_ = common.Interrupt(r.Reader)
 }
 
 // RateLimitedWriter wraps a buf.Writer with a token-bucket cap. Each byte
@@ -591,7 +594,7 @@ func (w *RateLimitedWriter) Close() error {
 }
 
 func (w *RateLimitedWriter) Interrupt() {
-	common.Interrupt(w.Writer)
+	_ = common.Interrupt(w.Writer)
 }
 
 // RateLimitedReader wraps a buf.Reader so the reading side also throttles.
@@ -613,5 +616,5 @@ func (r *RateLimitedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 }
 
 func (r *RateLimitedReader) Interrupt() {
-	common.Interrupt(r.Reader)
+	_ = common.Interrupt(r.Reader)
 }

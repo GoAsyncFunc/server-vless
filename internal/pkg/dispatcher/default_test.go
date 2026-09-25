@@ -107,6 +107,7 @@ func (m testOutboundManager) GetDefaultHandler() outbound.Handler { return m.def
 func (m testOutboundManager) AddHandler(context.Context, outbound.Handler) error {
 	return common.ErrNoClue
 }
+
 func (m testOutboundManager) RemoveHandler(context.Context, string) error {
 	return common.ErrNoClue
 }

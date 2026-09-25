@@ -155,7 +155,7 @@ func (s *Server) Start() error {
 
 	nodeConfig, err := fetchInitialNodeInfo(ctx, s.apiClient)
 	if err != nil {
-		return fmt.Errorf("get node info error: %s", err)
+		return fmt.Errorf("get node info error: %w", err)
 	}
 	if nodeConfig == nil {
 		return fmt.Errorf("node info is empty")
@@ -165,27 +165,27 @@ func (s *Server) Start() error {
 
 	inboundHandlerConfig, err := service.InboundBuilder(s.serviceConfig, nodeConfig)
 	if err != nil {
-		return fmt.Errorf("build inbound config error: %s", err)
+		return fmt.Errorf("build inbound config error: %w", err)
 	}
 
 	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig, nodeConfig)
 	if err != nil {
-		return fmt.Errorf("build outbound config error: %s", annotateGeoAssetError(err))
+		return fmt.Errorf("build outbound config error: %w", annotateGeoAssetError(err))
 	}
 
 	pbConfig, err := s.loadCore(inboundHandlerConfig, outboundHandlerConfig, nodeConfig)
 	if err != nil {
-		return fmt.Errorf("load core config error: %s", annotateGeoAssetError(err))
+		return fmt.Errorf("load core config error: %w", annotateGeoAssetError(err))
 	}
 
 	instance, err := core.New(pbConfig)
 	if err != nil {
-		return fmt.Errorf("create core instance error: %s", err)
+		return fmt.Errorf("create core instance error: %w", err)
 	}
 	s.instance = instance
 
 	if err := s.instance.Start(); err != nil {
-		return fmt.Errorf("start core instance error: %s", err)
+		return fmt.Errorf("start core instance error: %w", err)
 	}
 
 	s.service = service.New(
@@ -198,7 +198,7 @@ func (s *Server) Start() error {
 	)
 
 	if err := s.service.Start(); err != nil {
-		return fmt.Errorf("start service error: %s", err)
+		return fmt.Errorf("start service error: %w", err)
 	}
 
 	success = true

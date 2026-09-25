@@ -12,7 +12,7 @@ on:
       - main
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,11 +25,27 @@ jobs:
           go-version: '1.27'
           check-latest: true
 
-      # Re-enable after verifying golangci-lint compatibility with Go 1.27
-      # - name: golangci-lint
-      #   uses: golangci/golangci-lint-action@v6
-      #   with:
-      #     version: latest
+      # The v2 line is required, not cosmetic: v1 cannot parse Go 1.27 source,
+      # which is what the old commented-out step was waiting on. Pinned to the
+      # version `make lint_install` installs so local and CI cannot drift.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14.0
+          args: --timeout=5m
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+          check-latest: true
 
       - name: Download dependencies
         run: go mod download

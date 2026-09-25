@@ -1,0 +1,35 @@
+# golangci-lint v2 config. The v2 line is required, not cosmetic: v1 cannot
+# parse Go 1.27 source, which is why the CI step sat commented out.
+version: "2"
+
+formatters:
+  # gofumpt is a strict superset of the `gofmt -s` the Makefile already runs,
+  # so this enforces a rule the project had already declared. gci is left out
+  # on purpose -- see the note in the Makefile's fmt target.
+  enable:
+    - gofumpt
+
+linters:
+  default: standard
+  enable:
+    # An unclosed response body leaks the connection. This package makes raw
+    # HTTP calls to the panel next to the SDK's own.
+    - bodyclose
+    # `%s` on an error and `==` against a sentinel both stop working the
+    # moment something in the chain wraps, and they fail silently.
+    - errorlint
+    # Catches `if err != nil { return nil }` where that was not the intent.
+    - nilerr
+  exclusions:
+    generated: lax
+    presets:
+      # The standard benign set: Close/Flush/print results on paths where the
+      # error carries nothing actionable.
+      - std-error-handling
+
+issues:
+  # Both defaults hide findings -- the same message is reported at most three
+  # times, and a linter stops at fifty. A gate that silently drops the fourth
+  # instance of a real problem is not a gate.
+  max-issues-per-linter: 0
+  max-same-issues: 0

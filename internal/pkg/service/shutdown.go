@@ -26,7 +26,7 @@ func (b *Builder) shutdown() error {
 	defer cancel()
 	for _, task := range tasks {
 		if err := task.Wait(ctx); err != nil {
-			return fmt.Errorf("%w: waiting for background tasks: %v", ErrShutdownIncomplete, err)
+			return fmt.Errorf("%w: waiting for background tasks: %w", ErrShutdownIncomplete, err)
 		}
 	}
 	// Remove listeners before the final drain. Stats remain available until the

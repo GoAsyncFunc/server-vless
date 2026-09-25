@@ -135,19 +135,13 @@ func (b *Builder) Start() error {
 	}
 
 	log.Infoln("Start monitoring for user acquisition")
-	if err := b.fetchUsersMonitorPeriodic.Start(); err != nil {
-		return fmt.Errorf("fetch users monitor periodic start error: %s", err)
-	}
+	b.fetchUsersMonitorPeriodic.Start()
 
 	log.Infoln("Start traffic reporting monitoring")
-	if err := b.reportTrafficsMonitorPeriodic.Start(); err != nil {
-		return fmt.Errorf("traffic monitor periodic start error: %s", err)
-	}
+	b.reportTrafficsMonitorPeriodic.Start()
 
 	log.Infoln("Start node config monitoring")
-	if err := b.checkNodeConfigMonitorPeriodic.Start(); err != nil {
-		return fmt.Errorf("node config monitor periodic start error: %s", err)
-	}
+	b.checkNodeConfigMonitorPeriodic.Start()
 
 	// Device admission depends on alive/alivelist even when online reporting
 	// was not explicitly configured. Keep a bounded refresh cadence.
@@ -161,9 +155,7 @@ func (b *Builder) Start() error {
 			Execute:  b.heartbeatMonitor,
 		}
 		log.Infoln("Start heartbeat monitoring")
-		if err := b.heartbeatMonitorPeriodic.Start(); err != nil {
-			return fmt.Errorf("heartbeat monitor periodic start error: %s", err)
-		}
+		b.heartbeatMonitorPeriodic.Start()
 	}
 	return nil
 }
@@ -643,7 +635,7 @@ func (b *Builder) addUsers(users []*protocol.User, tag string) error {
 	}
 	handler, err := inboundManager.GetHandler(b.ctx, tag)
 	if err != nil {
-		return fmt.Errorf("failed to get inbound handler: %s", err)
+		return fmt.Errorf("failed to get inbound handler: %w", err)
 	}
 
 	inboundInstance, ok := handler.(proxy.GetInbound)
@@ -678,7 +670,7 @@ func (b *Builder) removeUsers(users []string, tag string) error {
 	}
 	handler, err := inboundManager.GetHandler(b.ctx, tag)
 	if err != nil {
-		return fmt.Errorf("failed to get inbound handler: %s", err)
+		return fmt.Errorf("failed to get inbound handler: %w", err)
 	}
 
 	inboundInstance, ok := handler.(proxy.GetInbound)
