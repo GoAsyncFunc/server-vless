@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,51 @@ func TestEmptyHeartbeatDoesNotFollowRedirectOrLeakToken(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-heartbeat-token") {
 		t.Fatal("token leaked")
+	}
+}
+
+// TestEmptyHeartbeatValidatesAcknowledgement pins the contract that the empty
+// /push heartbeat is judged the same way as a non-empty report. v2board's push
+// handler answers an empty body with 200 {"data":true}
+// (UniProxyController::push), so the acknowledged cases are what the real panel
+// produces and must keep working; the rest are the responses that used to look
+// like success purely because the status code was 2xx.
+func TestEmptyHeartbeatValidatesAcknowledgement(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		status int
+		body   string
+		wantOK bool
+	}{
+		"acknowledged":            {http.StatusOK, `{"data":true}`, true},
+		"no content":              {http.StatusNoContent, "", true},
+		"not acknowledged":        {http.StatusOK, `{"data":false}`, false},
+		"missing acknowledgement": {http.StatusOK, `{}`, false},
+		"non-json body":           {http.StatusOK, `<html>bad gateway</html>`, false},
+		"server error":            {http.StatusInternalServerError, `{"data":true}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			panel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(testCase.status)
+				_, _ = io.WriteString(w, testCase.body)
+			}))
+			defer panel.Close()
+			c, err := NewPanelClient(&api.Config{APIHost: panel.URL, NodeID: 1, NodeType: "vless", Key: "secret-heartbeat-token"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = c.ReportUserTraffic(context.Background(), nil)
+
+			if testCase.wantOK && err != nil {
+				t.Fatalf("heartbeat error = %v, want nil", err)
+			}
+			if !testCase.wantOK && err == nil {
+				t.Fatal("heartbeat accepted a response it should have rejected")
+			}
+			if err != nil && strings.Contains(err.Error(), "secret-heartbeat-token") {
+				t.Fatalf("token leaked into %q", err)
+			}
+		})
 	}
 }
 

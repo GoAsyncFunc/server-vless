@@ -3,7 +3,9 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -15,8 +17,14 @@ import (
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 )
 
+// maxPushResponseBytes bounds the heartbeat response we buffer. UniProxy applies
+// the same limit to every other response (client.go:maxResponseBodyBytes), so
+// mirroring it keeps the hand-rolled heartbeat from being the one endpoint whose
+// reply we would read without a ceiling.
+const maxPushResponseBytes = 8 * 1024 * 1024
+
 // PanelClient keeps the validated UniProxy client and adds the empty /push
-// heartbeat that UniProxy v0.1.1 deliberately treats as a no-op.
+// heartbeat that api.Client deliberately treats as a no-op.
 type PanelClient struct {
 	*api.Client
 	pushURL string
@@ -77,8 +85,42 @@ func (c *PanelClient) ReportUserTraffic(ctx context.Context, traffic []api.UserT
 		return fmt.Errorf("empty traffic heartbeat request failed")
 	}
 	defer response.Body.Close()
+	return checkPushAcknowledgement(response)
+}
+
+// checkPushAcknowledgement mirrors api.Client.checkReportResponse, which every
+// non-empty report goes through. The empty heartbeat has to be hand-rolled --
+// api.Client.ReportUserTraffic returns early on an empty slice -- so without
+// this it would be the one report where a 200 carrying {"data":false} still
+// counted as success, and a panel that stopped accepting our traffic would look
+// healthy from the node side.
+//
+// The error deliberately carries no URL and no response body: pushURL has the
+// node token in its query string, and the caller only needs to know that the
+// heartbeat was not acknowledged.
+func checkPushAcknowledgement(response *http.Response) error {
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("empty traffic heartbeat HTTP %d", response.StatusCode)
+	}
+	// 204 means accepted with no body, same as the non-empty path.
+	if response.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxPushResponseBytes))
+	if err != nil {
+		return fmt.Errorf("read empty traffic heartbeat response: %w", err)
+	}
+	var acknowledgement struct {
+		Data *bool `json:"data"`
+	}
+	if err := json.Unmarshal(body, &acknowledgement); err != nil {
+		return fmt.Errorf("decode empty traffic heartbeat acknowledgement: %w", err)
+	}
+	if acknowledgement.Data == nil {
+		return fmt.Errorf("empty traffic heartbeat response must include a boolean data acknowledgement")
+	}
+	if !*acknowledgement.Data {
+		return fmt.Errorf("empty traffic heartbeat was not acknowledged")
 	}
 	return nil
 }
