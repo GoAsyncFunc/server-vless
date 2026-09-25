@@ -131,9 +131,7 @@ var (
 
 func file_config_proto_rawDescGZIP() []byte {
 	file_config_proto_rawDescOnce.Do(func() {
-		file_config_proto_rawDescOnce.Do(func() {
-			file_config_proto_rawDescData = protoimpl.X.CompressGZIP(file_config_proto_rawDescData)
-		})
+		file_config_proto_rawDescData = protoimpl.X.CompressGZIP(file_config_proto_rawDescData)
 	})
 	return file_config_proto_rawDescData
 }
