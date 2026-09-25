@@ -18,7 +18,10 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
+      # No id-token: write. Only two things need an OIDC token here, and neither
+      # is in use: provenance/SBOM attestation (provenance is false and sbom is
+      # unset) and Docker Hub OIDC login (this workflow logs in to ghcr.io with
+      # GITHUB_TOKEN, not to Docker Hub with an OIDC connection).
 
     steps:
       - name: Checkout repository

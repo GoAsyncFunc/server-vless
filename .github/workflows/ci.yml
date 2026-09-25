@@ -11,6 +11,15 @@ on:
       - master
       - main
 
+# Least privilege. Without this the job token falls back to the repository's
+# default, which can be read-write-all -- and these jobs run third-party
+# actions and code from pull requests. Both jobs only read the repository:
+# checkout, go test, and golangci-lint, whose own README asks for contents: read
+# and nothing more. pull-requests: read would only be needed for
+# only-new-issues, which this workflow does not set.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
