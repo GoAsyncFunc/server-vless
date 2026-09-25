@@ -5,6 +5,17 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
+    ignore:
+      # v0.2.0 was tagged and then withdrawn -- refs/tags/v0.2.0 no longer
+      # exists on GoAsyncFunc/uniproxy. The module proxy still serves it (Go
+      # proxies are immutable), so Dependabot keeps proposing it. It is also a
+      # regression: against v0.1.4 it changes only pkg/client.go, reverting the
+      # transport constructor to an unchecked assertion, so NewWithError panics
+      # again instead of returning an error. Remove this rule once the tag is
+      # back -- it matches that one version only, so later releases are
+      # unaffected either way.
+      - dependency-name: "github.com/GoAsyncFunc/uniproxy"
+        versions: ["0.2.0"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
