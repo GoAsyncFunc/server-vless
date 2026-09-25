@@ -463,14 +463,14 @@ func (b *Builder) reportTraffic(ctx context.Context, all bool) error {
 	currentTraffic := make(map[int][2]int64)
 	for _, user := range users {
 		email := buildUserEmail(tag, user.Id, user.Uuid)
-		up, down, _ := b.getTraffic(email)
+		up, down := b.getTraffic(email)
 		if up > 0 || down > 0 {
 			currentTraffic[user.Id] = [2]int64{up, down}
 		}
 	}
 
 	for email, uid := range b.retiredUsers {
-		up, down, _ := b.getTraffic(email)
+		up, down := b.getTraffic(email)
 		b.addPendingTrafficLocked(uid, up, down)
 	}
 	for uid, t := range currentTraffic {
@@ -594,13 +594,15 @@ func (b *Builder) compareUserList(newUsers, oldUsers []api.UserInfo) (deleted, a
 	return deleted, added
 }
 
-func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
+// getTraffic drains the user's byte counters and returns the delta since the
+// previous call. A missing counter reads as zero: GetCounter does not create.
+func (b *Builder) getTraffic(email string) (up int64, down int64) {
 	upName := "user>>>" + email + ">>>traffic>>>uplink"
 	downName := "user>>>" + email + ">>>traffic>>>downlink"
 
 	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
 	if !ok {
-		return 0, 0, 0
+		return 0, 0
 	}
 	upCounter := statsManager.GetCounter(upName)
 	downCounter := statsManager.GetCounter(downName)
@@ -611,21 +613,7 @@ func (b *Builder) getTraffic(email string) (up int64, down int64, count int64) {
 	if downCounter != nil {
 		down = downCounter.Set(0)
 	}
-	return up, down, 0
-}
-
-// unregisterUserStats removes per-user counter and online map entries from the
-// stats manager and drops the user's rate-limit bucket. Used both when a user
-// is deleted and when the inbound tag changes (old-email entries leak).
-func (b *Builder) unregisterUserStats(email string) {
-	limiter.Remove(email)
-	sm, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
-	if !ok {
-		return
-	}
-	_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>uplink")
-	_ = sm.UnregisterCounter("user>>>" + email + ">>>traffic>>>downlink")
-	_ = sm.UnregisterOnlineMap("user>>>" + email + ">>>online")
+	return up, down
 }
 
 func (b *Builder) addNewUser(userInfo []api.UserInfo) error {

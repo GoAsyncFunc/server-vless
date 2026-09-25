@@ -35,10 +35,11 @@ func (b *Builder) populateHandler(handler inbound.Handler, tag string, node *api
 }
 
 // Keep the old counters registered: in-flight connections may still hold them
-// and add bytes after a port/UUID change. Each reporting cycle drains them.
-// They live until core shutdown rather than risking dropping late traffic.
+// and add bytes after a port/UUID change. Each reporting cycle drains them, so
+// retiredUsers is append-only -- entries are never pruned -- and the counters
+// live until core shutdown rather than risking dropped late traffic.
 func (b *Builder) retireUserLocked(email string, uid int) {
-	up, down, _ := b.getTraffic(email)
+	up, down := b.getTraffic(email)
 	b.addPendingTrafficLocked(uid, up, down)
 	if b.retiredUsers == nil {
 		b.retiredUsers = make(map[string]int)
