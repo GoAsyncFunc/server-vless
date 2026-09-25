@@ -135,7 +135,7 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 	// Security (TLS / Reality)
 	tlsSettings := new(conf.TLSConfig)
 	switch nodeInfo.Security {
-	case 1: // TLS
+	case api.Tls:
 		if config == nil || config.Cert == nil {
 			return nil, fmt.Errorf("tls cert config is required")
 		}
@@ -147,7 +147,7 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 			},
 		}
 		streamSetting.TLSSettings = tlsSettings
-	case 2: // REALITY
+	case api.Reality:
 		streamSetting.Security = "reality"
 		realitySettings := new(conf.REALITYConfig)
 

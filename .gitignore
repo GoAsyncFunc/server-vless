@@ -21,6 +21,10 @@ __pycache__/
 # Claude Code local settings
 .claude/
 
+# Local agent tooling traces
+.pi-traces/
+.workbuddy-ai/
+
 # Code Review Graph (MCP tool generated)
 .code-review-graph/
 
