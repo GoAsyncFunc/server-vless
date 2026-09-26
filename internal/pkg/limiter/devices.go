@@ -54,12 +54,11 @@ func RemoveDevices(email string) { devices.Lock(); delete(devices.users, email);
 // entry means there is no limit to apply. Denying instead would reject
 // connections for identities the panel never asked us to meter.
 //
-// One path does publish an identity to Xray before its entry exists: a reload
-// that changes the inbound tag (a port change) adds the new handler, and only
-// then re-registers the per-user limits. A connection that reaches the new port
-// inside that gap is admitted without a reservation. The gap is short and needs
-// precise timing, but it is real -- so do not move that limit loop any further
-// away from the AddHandler call.
+// That reading only holds while every path registers an identity's limit before
+// the identity can accept connections. addNewUser does, and the reload path
+// registers the new tag's limits before making its handler live. Keep both
+// orderings: a limit registered afterwards leaves the branch above admitting
+// connections that are never counted against the panel's device limit.
 func AcquireDevice(email, ip string) (func(), bool) {
 	devices.Lock()
 	d := devices.users[email]

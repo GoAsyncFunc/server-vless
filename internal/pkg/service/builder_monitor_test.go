@@ -445,20 +445,24 @@ func TestFetchUsersMonitorReplacesUserOnUuidChange(t *testing.T) {
 
 // retiredTestIdentities fills the retired set with n synthetic identities, the
 // way a port or UUID change retires the whole user list at once. UIDs start at
-// 1 so they look like real panel ids.
+// 1 so they look like real panel ids. The timestamps are fresh, so nothing is
+// due for pruning unless a test ages them on purpose.
 func retiredTestIdentities(b *Builder, n int) {
 	b.retiredUsers = make(map[string]int, n)
+	b.retiredAt = make(map[string]time.Time, n)
 	b.retiredOrder = make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		email := fmt.Sprintf("retired|%d|%s", i, testUuidA)
 		b.retiredUsers[email] = i + 1
+		b.retiredAt[email] = time.Now()
 		b.retiredOrder = append(b.retiredOrder, email)
 	}
 }
 
-// retiredUsers only grows, so draining every entry on every cycle would hold
-// b.mu -- and therefore Users() and heartbeatMonitor -- for longer and longer.
-// One cycle must walk one batch, and the tail must still be reported later.
+// A tag change adds the whole user list to the retired set at once, so draining
+// every entry on every cycle would hold b.mu -- and therefore Users() and
+// heartbeatMonitor -- for longer and longer. One cycle must walk one batch, and
+// the tail must still be reported later.
 func TestReportTrafficDrainsRetiredUsersInBatches(t *testing.T) {
 	node := newTestNode(t)
 	instance, tag := newTestInstance(t, node)
@@ -510,6 +514,91 @@ func TestReportTrafficAllDrainsEveryRetiredUser(t *testing.T) {
 	wantUID := trafficScanBatchSize + 3
 	if got := panel.lastTraffic(); len(got) != 1 || got[0].UID != wantUID || got[0].Upload != 20 {
 		t.Fatalf("final drain reported %+v, want the tail identity uid %d", got, wantUID)
+	}
+}
+
+// A retired identity is kept only long enough for its in-flight sessions to
+// finish. Once it is past retiredIdentityTTL the entry and its two counters must
+// go, and the last bytes it wrote must still reach the panel in that same cycle.
+func TestReportTrafficPrunesRetiredIdentitiesPastTheirTTL(t *testing.T) {
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node}
+	b := New(context.Background(), tag, instance, &Config{}, node, panel)
+
+	retiredTestIdentities(b, 1)
+	email := b.retiredOrder[0]
+	b.retiredAt[email] = time.Now().Add(-retiredIdentityTTL - time.Second)
+	addTestTraffic(t, instance, email, 77, 0)
+
+	if err := b.reportTrafficsMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	if got := panel.lastTraffic(); len(got) != 1 || got[0].UID != 1 || got[0].Upload != 77 {
+		t.Fatalf("reported %+v, want the expired identity's last bytes (uid 1, upload 77)", got)
+	}
+	if _, ok := b.retiredUsers[email]; ok {
+		t.Fatal("expired identity is still in the retired set")
+	}
+	if len(b.retiredOrder) != 0 {
+		t.Fatalf("retiredOrder = %v, want it empty after the only entry expired", b.retiredOrder)
+	}
+	sm := testStatsManager(t, instance)
+	if c := sm.GetCounter("user>>>" + email + ">>>traffic>>>uplink"); c != nil {
+		t.Fatal("uplink counter survived the prune")
+	}
+	if c := sm.GetCounter("user>>>" + email + ">>>traffic>>>downlink"); c != nil {
+		t.Fatal("downlink counter survived the prune")
+	}
+}
+
+// An identity inside its TTL keeps being drained: a session on the retired tag
+// may still be open, so its bytes have to keep reaching the panel.
+func TestReportTrafficKeepsRetiredIdentitiesInsideTheirTTL(t *testing.T) {
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node}
+	b := New(context.Background(), tag, instance, &Config{}, node, panel)
+
+	retiredTestIdentities(b, 1)
+	email := b.retiredOrder[0]
+	b.retiredAt[email] = time.Now().Add(-retiredIdentityTTL + time.Minute)
+	addTestTraffic(t, instance, email, 5, 0)
+
+	if err := b.reportTrafficsMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	if got := panel.lastTraffic(); len(got) != 1 || got[0].Upload != 5 {
+		t.Fatalf("reported %+v, want the young identity's traffic", got)
+	}
+	if _, ok := b.retiredUsers[email]; !ok {
+		t.Fatal("identity inside its TTL was pruned")
+	}
+	if len(b.retiredOrder) != 1 || b.retiredScanCursor != 0 {
+		t.Fatalf("scan order/cursor = %v/%d, want the entry kept and the cursor wrapped",
+			b.retiredOrder, b.retiredScanCursor)
+	}
+}
+
+// Compacting the order slice shifts the entries after a pruned one, so the
+// cursor has to move with them. If it does not, the identities that shifted
+// into the pruned slot are skipped for a whole sweep.
+func TestPruneRetiredLockedKeepsCursorOnTheNextIdentity(t *testing.T) {
+	b := &Builder{instance: newStatlessInstance(t)}
+	retiredTestIdentities(b, 4)
+	order := append([]string(nil), b.retiredOrder...)
+	b.retiredScanCursor = 2
+
+	b.pruneRetiredLocked(map[string]struct{}{order[0]: {}})
+
+	if !slices.Equal(b.retiredOrder, order[1:]) {
+		t.Fatalf("retiredOrder = %v, want %v", b.retiredOrder, order[1:])
+	}
+	if b.retiredScanCursor != 1 {
+		t.Fatalf("cursor = %d, want 1 so the sweep resumes at %q", b.retiredScanCursor, order[2])
+	}
+	if got := b.nextRetiredScanLocked(1); len(got) != 1 || got[0] != order[2] {
+		t.Fatalf("next batch = %v, want [%s]", got, order[2])
 	}
 }
 

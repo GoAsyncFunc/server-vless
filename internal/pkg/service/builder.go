@@ -47,6 +47,7 @@ type Builder struct {
 	pendingNodeInfo                *api.NodeInfo
 	retiredUsers                   map[string]int
 	retiredOrder                   []string
+	retiredAt                      map[string]time.Time
 	retiredScanCursor              int
 	reportMu                       sync.Mutex
 	lastReportedIPs                map[int][]string
@@ -63,6 +64,15 @@ type Builder struct {
 }
 
 const trafficScanBatchSize = 2048
+
+// retiredIdentityTTL is how long a retired identity is kept after the tag it
+// belonged to went away. Its counters are still drained during that window
+// because sessions that were already open keep adding bytes. Retiring a tag
+// hands us the whole user list, so without a bound the retired set grows with
+// every port or UUID change. The cost of guessing too low is traffic that lands
+// in a counter nothing reads any more, so raise this rather than the batch size
+// if a panel ever reports gaps.
+const retiredIdentityTTL = 24 * time.Hour
 
 type nodeConfigChange int
 
@@ -396,21 +406,54 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		_ = oldHandler.Close()
 		return err
 	}
+	b.activateInbound(inboundManager, newHandler, oldHandler, newInboundConfig, newNodeInfo)
+	return nil
+}
+
+// activateInbound makes a fully populated handler live under its own tag and
+// retires the previous tag. The caller holds b.mu and has already populated
+// both handlers.
+func (b *Builder) activateInbound(
+	inboundManager inbound.Manager,
+	newHandler, oldHandler inbound.Handler,
+	newInboundConfig *core.InboundHandlerConfig,
+	newNodeInfo *api.NodeInfo,
+) {
 	if err := inboundManager.RemoveHandler(b.ctx, b.inboundTag); err != nil {
 		_ = newHandler.Close()
 		_ = oldHandler.Close()
 		log.Errorln("Failed to remove old inbound handler:", err)
-		return nil
+		return
+	}
+	// Register the new tag's per-user limits before its handler goes live.
+	// AcquireDevice admits an identity that has no device entry -- there is
+	// nothing to meter yet -- so registering these after AddHandler would let
+	// the first connections to reach the new port through without a
+	// reservation, and they would never be counted against the panel's limit.
+	for _, u := range b.userList {
+		email := buildUserEmail(newInboundConfig.Tag, u.Id, u.Uuid)
+		limiter.Set(email, u.SpeedLimit)
+		limiter.SetDeviceLimit(email, u.DeviceLimit)
 	}
 	if err := inboundManager.AddHandler(b.ctx, newHandler); err != nil {
 		log.Errorln("Failed to add new inbound handler:", err)
 		// Xray inserts the handler into its map before Start can fail.
 		_ = inboundManager.RemoveHandler(b.ctx, newInboundConfig.Tag)
 		_ = newHandler.Close()
+		// The new tag never went live, so the limits registered for it above
+		// are unreachable state. When the tag is unchanged these are the live
+		// entries and must be left alone.
+		if newInboundConfig.Tag != b.inboundTag {
+			for _, u := range b.userList {
+				email := buildUserEmail(newInboundConfig.Tag, u.Id, u.Uuid)
+				limiter.Remove(email)
+				limiter.RemoveDevices(email)
+			}
+		}
 		if restoreErr := inboundManager.AddHandler(b.ctx, oldHandler); restoreErr != nil {
 			log.Errorln("Failed to restore old inbound handler after reload failure:", restoreErr)
 		}
-		return nil
+		return
 	}
 
 	_ = oldHandler.Close()
@@ -425,13 +468,7 @@ func (b *Builder) checkNodeConfigMonitor() error {
 		}
 	}
 
-	for _, u := range b.userList {
-		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
-		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
-	}
-
 	log.Infoln("Node configuration reloaded successfully. New Tag:", b.inboundTag)
-	return nil
 }
 
 func (b *Builder) addPendingTrafficLocked(uid int, up, down int64) {
@@ -468,11 +505,10 @@ func (b *Builder) nextTrafficScanUsersLocked(batchSize int) []api.UserInfo {
 // nextRetiredScanLocked mirrors nextTrafficScanUsersLocked for retiredUsers,
 // walking retiredOrder so the set can be drained in batches. The order slice
 // exists because Go randomises map iteration, so a map cannot carry a cursor.
-// The retired set only grows -- every port or UUID change adds the whole user
-// list to it -- so draining all of it every cycle would hold the write lock for
-// longer and longer. Batching delays late traffic from an already-retired
-// identity, but getTraffic drains a counter rather than reading it, so nothing
-// is lost, only reported a few cycles later.
+// A tag change adds the whole user list at once, so draining all of it every
+// cycle would hold the write lock for longer and longer. Batching delays late
+// traffic from an already-retired identity, but getTraffic drains a counter
+// rather than reading it, so nothing is lost, only reported a few cycles later.
 func (b *Builder) nextRetiredScanLocked(batchSize int) []string {
 	if len(b.retiredOrder) == 0 {
 		return nil
@@ -521,10 +557,18 @@ func (b *Builder) reportTraffic(ctx context.Context, all bool) error {
 		}
 	}
 
+	expiredRetired := make(map[string]struct{})
+	now := time.Now()
 	for _, email := range b.nextRetiredScanLocked(retiredBatchSize) {
 		up, down := b.getTraffic(email)
 		b.addPendingTrafficLocked(b.retiredUsers[email], up, down)
+		// Only an identity whose counter was just drained may be pruned; one
+		// that has not been swept yet this cycle still owes us its bytes.
+		if at, ok := b.retiredAt[email]; ok && now.Sub(at) >= retiredIdentityTTL {
+			expiredRetired[email] = struct{}{}
+		}
 	}
+	b.pruneRetiredLocked(expiredRetired)
 	for uid, t := range currentTraffic {
 		b.addPendingTrafficLocked(uid, t[0], t[1])
 	}
@@ -649,8 +693,7 @@ func (b *Builder) compareUserList(newUsers, oldUsers []api.UserInfo) (deleted, a
 // getTraffic drains the user's byte counters and returns the delta since the
 // previous call. A missing counter reads as zero: GetCounter does not create.
 func (b *Builder) getTraffic(email string) (up int64, down int64) {
-	upName := "user>>>" + email + ">>>traffic>>>uplink"
-	downName := "user>>>" + email + ">>>traffic>>>downlink"
+	upName, downName := trafficCounterNames(email)
 
 	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
 	if !ok {
@@ -666,6 +709,57 @@ func (b *Builder) getTraffic(email string) (up int64, down int64) {
 		down = downCounter.Set(0)
 	}
 	return up, down
+}
+
+func trafficCounterNames(email string) (upName, downName string) {
+	return "user>>>" + email + ">>>traffic>>>uplink", "user>>>" + email + ">>>traffic>>>downlink"
+}
+
+// pruneRetiredLocked drops retired identities that have outlived
+// retiredIdentityTTL, freeing both the scan entry and the two counters Xray
+// keeps for them. The caller must have drained every email in expired during
+// the same cycle: unregistering a counter only removes it from the manager's
+// map, so a session still holding the old counter object would keep adding to
+// something nobody reads.
+func (b *Builder) pruneRetiredLocked(expired map[string]struct{}) {
+	if len(expired) == 0 {
+		return
+	}
+	// Compact in place, moving the cursor along with the entries that stay so
+	// the next batch resumes where this one would have. Dropping entries before
+	// the cursor without adjusting it would skip the identities that shifted
+	// into their place.
+	kept := b.retiredOrder[:0]
+	cursor := 0
+	for i, email := range b.retiredOrder {
+		if _, drop := expired[email]; drop {
+			continue
+		}
+		if i < b.retiredScanCursor {
+			cursor++
+		}
+		kept = append(kept, email)
+	}
+	b.retiredOrder = kept
+	b.retiredScanCursor = cursor
+	if b.retiredScanCursor >= len(b.retiredOrder) {
+		b.retiredScanCursor = 0
+	}
+	for email := range expired {
+		delete(b.retiredUsers, email)
+		delete(b.retiredAt, email)
+		b.unregisterTrafficCounters(email)
+	}
+}
+
+func (b *Builder) unregisterTrafficCounters(email string) {
+	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
+	if !ok {
+		return
+	}
+	upName, downName := trafficCounterNames(email)
+	_ = statsManager.UnregisterCounter(upName)
+	_ = statsManager.UnregisterCounter(downName)
 }
 
 func (b *Builder) addNewUser(userInfo []api.UserInfo) error {

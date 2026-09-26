@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 	appdispatcher "github.com/xtls/xray-core/app/dispatcher"
 	_ "github.com/xtls/xray-core/app/policy"
@@ -212,5 +216,144 @@ func TestRetireUserLockedKeepsOneScanEntryPerIdentity(t *testing.T) {
 	}
 	if got := b.retiredUsers[email]; got != 1 {
 		t.Fatalf("retiredUsers[%q] = %d, want 1", email, got)
+	}
+}
+
+// Re-retiring an identity means its tag came back and went away again, so its
+// counter was re-registered and may have fresh bytes in it. Ageing it from the
+// first retirement would let the pruning sweep drop it while a session on the
+// second tag is still writing.
+func TestRetireUserLockedAgesFromTheLatestRetirement(t *testing.T) {
+	b := New(context.Background(), "vless_1", newStatlessInstance(t), &Config{}, nil, nil)
+	email := buildUserEmail("vless_1", 1, testUuidA)
+
+	b.retireUserLocked(email, 1)
+	stale := time.Now().Add(-retiredIdentityTTL - time.Hour)
+	b.retiredAt[email] = stale
+
+	b.retireUserLocked(email, 1)
+
+	if got := b.retiredAt[email]; !got.After(stale) {
+		t.Fatalf("retiredAt = %v, want it refreshed past the stale %v", got, stale)
+	}
+	if got := b.retiredOrder; len(got) != 1 {
+		t.Fatalf("retiredOrder = %v, want the identity listed once", got)
+	}
+}
+
+// fakeInboundHandler is the minimum inbound.Handler the swap path touches.
+type fakeInboundHandler struct{ tag string }
+
+func (h *fakeInboundHandler) Start() error                           { return nil }
+func (h *fakeInboundHandler) Close() error                           { return nil }
+func (h *fakeInboundHandler) Tag() string                            { return h.tag }
+func (h *fakeInboundHandler) ReceiverSettings() *serial.TypedMessage { return nil }
+func (h *fakeInboundHandler) ProxySettings() *serial.TypedMessage    { return nil }
+
+// probeInboundManager stands in for the inbound manager so a test can inspect
+// the limiter state at the instant the new handler is added -- the first moment
+// the new tag can accept connections. Embedding the interface makes any method
+// the swap path does not use fail loudly instead of returning zero values.
+type probeInboundManager struct {
+	inbound.Manager
+	added   []inbound.Handler
+	removed []string
+	failTag string
+	onAdd   func()
+}
+
+func (m *probeInboundManager) AddHandler(_ context.Context, handler inbound.Handler) error {
+	if m.onAdd != nil {
+		m.onAdd()
+	}
+	if handler.Tag() == m.failTag {
+		return errors.New("bind: address already in use")
+	}
+	m.added = append(m.added, handler)
+	return nil
+}
+
+func (m *probeInboundManager) RemoveHandler(_ context.Context, tag string) error {
+	m.removed = append(m.removed, tag)
+	return nil
+}
+
+// A reload that changes the inbound tag (a port change) must register the new
+// tag's device limits before its handler can accept connections. AcquireDevice
+// admits an identity with no device entry, so a limit registered after
+// AddHandler lets the first connections to the new port through without a
+// reservation -- and they are never counted against the panel's limit.
+func TestActivateInboundRegistersDeviceLimitsBeforeHandlerIsLive(t *testing.T) {
+	const oldTag, newTag = "vless_1", "vless_2"
+	email := buildUserEmail(newTag, 1, testUuidA)
+	defer limiter.RemoveDevices(email)
+	defer limiter.Remove(email)
+
+	b := &Builder{
+		ctx:        context.Background(),
+		instance:   newStatlessInstance(t),
+		inboundTag: oldTag,
+		userList:   []api.UserInfo{{Id: 1, Uuid: testUuidA, DeviceLimit: 1}},
+	}
+	manager := &probeInboundManager{}
+	manager.onAdd = func() {
+		// The first probe is admitted whether or not the entry exists. The
+		// second is denied only if the first was actually recorded against the
+		// limit, which is what shows the entry was already there.
+		if _, ok := limiter.AcquireDevice(email, "192.0.2.1"); !ok {
+			t.Error("first device was rejected")
+		}
+		if _, ok := limiter.AcquireDevice(email, "192.0.2.2"); ok {
+			t.Error("device limit was not registered before the new handler went live")
+		}
+	}
+
+	b.activateInbound(manager, &fakeInboundHandler{tag: newTag}, &fakeInboundHandler{tag: oldTag},
+		&core.InboundHandlerConfig{Tag: newTag}, nil)
+
+	if len(manager.added) != 1 || manager.added[0].Tag() != newTag {
+		t.Fatalf("handlers added = %v, want the new tag", manager.added)
+	}
+	if b.inboundTag != newTag {
+		t.Fatalf("inboundTag = %q, want %q", b.inboundTag, newTag)
+	}
+}
+
+// When the new handler fails to start and the tag changed, the limits
+// registered for the tag that never went live must be dropped, and the old
+// handler restored with the old tag still current.
+func TestActivateInboundDropsLimitsWhenTheNewHandlerFailsToStart(t *testing.T) {
+	const oldTag, newTag = "vless_1", "vless_2"
+	email := buildUserEmail(newTag, 1, testUuidA)
+	defer limiter.RemoveDevices(email)
+	defer limiter.Remove(email)
+
+	b := &Builder{
+		ctx:        context.Background(),
+		instance:   newStatlessInstance(t),
+		inboundTag: oldTag,
+		userList:   []api.UserInfo{{Id: 1, Uuid: testUuidA, DeviceLimit: 1}},
+	}
+	manager := &probeInboundManager{failTag: newTag}
+
+	b.activateInbound(manager, &fakeInboundHandler{tag: newTag}, &fakeInboundHandler{tag: oldTag},
+		&core.InboundHandlerConfig{Tag: newTag}, nil)
+
+	if len(manager.added) != 1 || manager.added[0].Tag() != oldTag {
+		t.Fatalf("handlers added = %v, want the old tag restored", manager.added)
+	}
+	if !slices.Equal(manager.removed, []string{oldTag, newTag}) {
+		t.Fatalf("removed handlers = %v, want [%s %s]", manager.removed, oldTag, newTag)
+	}
+	if b.inboundTag != oldTag {
+		t.Fatalf("inboundTag = %q, want it unchanged at %q", b.inboundTag, oldTag)
+	}
+	// A missing entry means the failed tag's limits were cleaned up. A stale
+	// entry would make the second probe come back denied.
+	if _, ok := limiter.AcquireDevice(email, "192.0.2.1"); !ok {
+		t.Fatal("first device was rejected")
+	}
+	if _, ok := limiter.AcquireDevice(email, "192.0.2.2"); !ok {
+		t.Fatal("limits for a tag that never went live were left registered")
 	}
 }
