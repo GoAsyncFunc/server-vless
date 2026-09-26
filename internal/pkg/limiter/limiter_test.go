@@ -1,6 +1,7 @@
 package limiter
 
 import (
+	"math"
 	"testing"
 )
 
@@ -57,5 +58,44 @@ func TestBucketRate(t *testing.T) {
 	// Token capacity should equal rate (1-second burst).
 	if got, want := b.Capacity(), int64(1_000_000); got != want {
 		t.Errorf("capacity = %d, want %d", got, want)
+	}
+}
+
+// A panel-supplied speed_limit reaches Set without a range check, and
+// int64(mbps)*bitsPerMbps overflows for anything above ~7.4e13 -- at which
+// point ratelimit.NewBucketWithQuantum panics on the non-positive capacity.
+// The worst case has to be a saturated bucket, not a dead process.
+func TestSetSaturatesInsteadOfPanickingOnOverflow(t *testing.T) {
+	const email = "overflow-test"
+	defer Remove(email)
+
+	for _, mbps := range []int{1 << 47, 1 << 62, math.MaxInt} {
+		Set(email, mbps)
+		b := Bucket(email)
+		if b == nil {
+			t.Fatalf("Set(%d) registered no bucket", mbps)
+		}
+		if b.Capacity() <= 0 {
+			t.Fatalf("Set(%d) capacity = %d, want > 0", mbps, b.Capacity())
+		}
+	}
+}
+
+// Every limit past the saturation point resolves to the same stored value, so
+// a panel that keeps re-reporting an absurd limit must not rebuild the bucket
+// (which would reset the shared token balance on every user refresh).
+func TestSetDoesNotChurnBucketBetweenSaturatedLimits(t *testing.T) {
+	const email = "saturate-churn-test"
+	defer Remove(email)
+
+	Set(email, math.MaxInt)
+	first := Bucket(email)
+	if first == nil {
+		t.Fatal("expected bucket")
+	}
+
+	Set(email, math.MaxInt-1)
+	if got := Bucket(email); got != first {
+		t.Error("two saturated limits rebuilt the bucket")
 	}
 }
