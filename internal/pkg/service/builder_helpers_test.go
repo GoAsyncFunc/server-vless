@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"slices"
 	"sync"
 	"testing"
 
@@ -96,6 +97,37 @@ func TestNextTrafficScanUsersLockedRequestLargerThanList(t *testing.T) {
 	// Cursor wraps back to 0 once the end is reached.
 	if b.trafficScanCursor != 0 {
 		t.Fatalf("cursor should wrap to 0, got %d", b.trafficScanCursor)
+	}
+}
+
+func TestNextRetiredScanLockedReturnsNothingWhenEmpty(t *testing.T) {
+	b := &Builder{}
+	if got := b.nextRetiredScanLocked(8); len(got) != 0 {
+		t.Fatalf("no retired identities should scan as empty, got %v", got)
+	}
+	if b.retiredScanCursor != 0 {
+		t.Fatalf("cursor must remain at 0, got %d", b.retiredScanCursor)
+	}
+}
+
+func TestNextRetiredScanLockedBatchesAndWraps(t *testing.T) {
+	b := &Builder{retiredOrder: []string{"a", "b", "c"}}
+	if got := b.nextRetiredScanLocked(2); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("first batch = %v, want [a b]", got)
+	}
+	// The short tail still wraps the cursor, so the next call restarts the sweep.
+	if got := b.nextRetiredScanLocked(2); !slices.Equal(got, []string{"c"}) {
+		t.Fatalf("second batch = %v, want [c]", got)
+	}
+	if b.retiredScanCursor != 0 {
+		t.Fatalf("cursor should wrap to 0, got %d", b.retiredScanCursor)
+	}
+}
+
+func TestNextRetiredScanLockedResetsStaleCursor(t *testing.T) {
+	b := &Builder{retiredOrder: []string{"a", "b"}, retiredScanCursor: 99}
+	if got := b.nextRetiredScanLocked(2); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("expected full batch after cursor reset, got %v", got)
 	}
 }
 

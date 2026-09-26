@@ -196,3 +196,21 @@ func TestReloadRollback304TrafficAndIdlePush(t *testing.T) {
 		t.Fatalf("idle heartbeat must be empty object: %v", pushes)
 	}
 }
+
+// A tag can flip back and forth (A -> B -> A -> ...), retiring the same
+// identity more than once. It must appear in the scan order exactly once, or a
+// single sweep would drain -- and so report -- its counter repeatedly.
+func TestRetireUserLockedKeepsOneScanEntryPerIdentity(t *testing.T) {
+	b := New(context.Background(), "vless_1", newStatlessInstance(t), &Config{}, nil, nil)
+	email := buildUserEmail("vless_1", 1, testUuidA)
+
+	b.retireUserLocked(email, 1)
+	b.retireUserLocked(email, 1)
+
+	if got := b.retiredOrder; len(got) != 1 || got[0] != email {
+		t.Fatalf("retiredOrder = %v, want a single %q", got, email)
+	}
+	if got := b.retiredUsers[email]; got != 1 {
+		t.Fatalf("retiredUsers[%q] = %d, want 1", email, got)
+	}
+}

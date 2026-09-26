@@ -35,14 +35,20 @@ func (b *Builder) populateHandler(handler inbound.Handler, tag string, node *api
 }
 
 // Keep the old counters registered: in-flight connections may still hold them
-// and add bytes after a port/UUID change. Each reporting cycle drains them, so
-// retiredUsers is append-only -- entries are never pruned -- and the counters
-// live until core shutdown rather than risking dropped late traffic.
+// and add bytes after a port/UUID change. Each reporting cycle drains a batch
+// of them, so retiredUsers is append-only -- entries are never pruned -- and the
+// counters live until core shutdown rather than risking dropped late traffic.
 func (b *Builder) retireUserLocked(email string, uid int) {
 	up, down := b.getTraffic(email)
 	b.addPendingTrafficLocked(uid, up, down)
 	if b.retiredUsers == nil {
 		b.retiredUsers = make(map[string]int)
+	}
+	// The same identity can be retired more than once across repeated tag
+	// changes. Append it to the scan order only the first time, so one sweep
+	// drains its counter once instead of once per retirement.
+	if _, seen := b.retiredUsers[email]; !seen {
+		b.retiredOrder = append(b.retiredOrder, email)
 	}
 	b.retiredUsers[email] = uid
 	limiter.Remove(email)

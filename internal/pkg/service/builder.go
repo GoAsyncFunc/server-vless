@@ -46,6 +46,8 @@ type Builder struct {
 	apiClient                      PanelAPI
 	pendingNodeInfo                *api.NodeInfo
 	retiredUsers                   map[string]int
+	retiredOrder                   []string
+	retiredScanCursor              int
 	reportMu                       sync.Mutex
 	lastReportedIPs                map[int][]string
 	lastReportedAt                 map[int]time.Time
@@ -463,6 +465,33 @@ func (b *Builder) nextTrafficScanUsersLocked(batchSize int) []api.UserInfo {
 	return users
 }
 
+// nextRetiredScanLocked mirrors nextTrafficScanUsersLocked for retiredUsers,
+// walking retiredOrder so the set can be drained in batches. The order slice
+// exists because Go randomises map iteration, so a map cannot carry a cursor.
+// The retired set only grows -- every port or UUID change adds the whole user
+// list to it -- so draining all of it every cycle would hold the write lock for
+// longer and longer. Batching delays late traffic from an already-retired
+// identity, but getTraffic drains a counter rather than reading it, so nothing
+// is lost, only reported a few cycles later.
+func (b *Builder) nextRetiredScanLocked(batchSize int) []string {
+	if len(b.retiredOrder) == 0 {
+		return nil
+	}
+	if b.retiredScanCursor >= len(b.retiredOrder) {
+		b.retiredScanCursor = 0
+	}
+	end := b.retiredScanCursor + batchSize
+	if end > len(b.retiredOrder) {
+		end = len(b.retiredOrder)
+	}
+	batch := b.retiredOrder[b.retiredScanCursor:end]
+	b.retiredScanCursor = end
+	if b.retiredScanCursor >= len(b.retiredOrder) {
+		b.retiredScanCursor = 0
+	}
+	return batch
+}
+
 func (b *Builder) reportTrafficsMonitor() error {
 	return b.reportTraffic(b.ctx, false)
 }
@@ -473,9 +502,13 @@ func (b *Builder) reportTraffic(ctx context.Context, all bool) error {
 	b.mu.Lock()
 	tag := b.inboundTag
 	batchSize := trafficScanBatchSize
+	retiredBatchSize := trafficScanBatchSize
 	if all {
+		// The final drain has to cover everything, not one batch.
 		batchSize = len(b.userList)
+		retiredBatchSize = len(b.retiredOrder)
 		b.trafficScanCursor = 0
+		b.retiredScanCursor = 0
 	}
 	users := b.nextTrafficScanUsersLocked(batchSize)
 
@@ -488,9 +521,9 @@ func (b *Builder) reportTraffic(ctx context.Context, all bool) error {
 		}
 	}
 
-	for email, uid := range b.retiredUsers {
+	for _, email := range b.nextRetiredScanLocked(retiredBatchSize) {
 		up, down := b.getTraffic(email)
-		b.addPendingTrafficLocked(uid, up, down)
+		b.addPendingTrafficLocked(b.retiredUsers[email], up, down)
 	}
 	for uid, t := range currentTraffic {
 		b.addPendingTrafficLocked(uid, t[0], t[1])

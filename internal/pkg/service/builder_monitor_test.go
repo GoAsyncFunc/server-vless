@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -439,6 +440,76 @@ func TestFetchUsersMonitorReplacesUserOnUuidChange(t *testing.T) {
 	}
 	if got := b.Users(); len(got) != 1 || got[0].Uuid != testUuidB {
 		t.Fatalf("user list not updated to the new UUID: %v", got)
+	}
+}
+
+// retiredTestIdentities fills the retired set with n synthetic identities, the
+// way a port or UUID change retires the whole user list at once. UIDs start at
+// 1 so they look like real panel ids.
+func retiredTestIdentities(b *Builder, n int) {
+	b.retiredUsers = make(map[string]int, n)
+	b.retiredOrder = make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		email := fmt.Sprintf("retired|%d|%s", i, testUuidA)
+		b.retiredUsers[email] = i + 1
+		b.retiredOrder = append(b.retiredOrder, email)
+	}
+}
+
+// retiredUsers only grows, so draining every entry on every cycle would hold
+// b.mu -- and therefore Users() and heartbeatMonitor -- for longer and longer.
+// One cycle must walk one batch, and the tail must still be reported later.
+func TestReportTrafficDrainsRetiredUsersInBatches(t *testing.T) {
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node}
+	b := New(context.Background(), tag, instance, &Config{}, node, panel)
+
+	retiredTestIdentities(b, trafficScanBatchSize+3)
+	head := b.retiredOrder[0]
+	tail := b.retiredOrder[len(b.retiredOrder)-1]
+	addTestTraffic(t, instance, head, 10, 0)
+	addTestTraffic(t, instance, tail, 20, 0)
+
+	if err := b.reportTrafficsMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	if got := panel.lastTraffic(); len(got) != 1 || got[0].UID != 1 || got[0].Upload != 10 {
+		t.Fatalf("first cycle reported %+v, want only the in-batch retired identity", got)
+	}
+	if b.retiredScanCursor != trafficScanBatchSize {
+		t.Fatalf("first cycle cursor = %d, want exactly one batch", b.retiredScanCursor)
+	}
+
+	// The tail is past the batch boundary, so it is picked up on the next
+	// sweep. Batching delays late traffic; it must not lose it.
+	if err := b.reportTrafficsMonitor(); err != nil {
+		t.Fatal(err)
+	}
+	wantUID := trafficScanBatchSize + 3
+	if got := panel.lastTraffic(); len(got) != 1 || got[0].UID != wantUID || got[0].Upload != 20 {
+		t.Fatalf("second cycle reported %+v, want the tail identity uid %d", got, wantUID)
+	}
+}
+
+// The final drain at shutdown runs with all=true. It must cover the whole
+// retired set in one call rather than stopping at the first batch.
+func TestReportTrafficAllDrainsEveryRetiredUser(t *testing.T) {
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node}
+	b := New(context.Background(), tag, instance, &Config{}, node, panel)
+
+	retiredTestIdentities(b, trafficScanBatchSize+3)
+	tail := b.retiredOrder[len(b.retiredOrder)-1]
+	addTestTraffic(t, instance, tail, 20, 0)
+
+	if err := b.reportTraffic(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	wantUID := trafficScanBatchSize + 3
+	if got := panel.lastTraffic(); len(got) != 1 || got[0].UID != wantUID || got[0].Upload != 20 {
+		t.Fatalf("final drain reported %+v, want the tail identity uid %d", got, wantUID)
 	}
 }
 
