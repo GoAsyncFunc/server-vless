@@ -11,6 +11,7 @@ import (
 	"time"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
+	log "github.com/sirupsen/logrus"
 	appdispatcher "github.com/xtls/xray-core/app/dispatcher"
 	_ "github.com/xtls/xray-core/app/policy"
 	"github.com/xtls/xray-core/app/proxyman"
@@ -47,6 +48,10 @@ type fakePanel struct {
 	users    []api.UserInfo
 	usersErr error
 	userCall int
+	// usersPanic, when non-nil, makes GetUserList panic with it. Used to prove
+	// Builder.Start converts a panic into an error instead of killing the
+	// process on the startup path.
+	usersPanic any
 
 	trafficErr  error
 	trafficSent [][]api.UserTraffic
@@ -68,6 +73,9 @@ func (p *fakePanel) GetUserList(context.Context) ([]api.UserInfo, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.userCall++
+	if p.usersPanic != nil {
+		panic(p.usersPanic)
+	}
 	return p.users, p.usersErr
 }
 
@@ -245,12 +253,65 @@ func TestStartPropagatesUserListError(t *testing.T) {
 	}
 }
 
-func TestStartRejectsEmptyUserList(t *testing.T) {
-	panel := &fakePanel{}
+// An empty user list is the panel's normal way of saying "nobody in this
+// node's group is entitled right now": getAvailableUsers filters on
+// u+d < transfer_enable, expired_at, and banned. Refusing to start turned that
+// into a crash-loop under systemd Restart=on-failure, with two panel requests
+// per retry, while the same response at runtime is correctly handled as
+// "evict everyone".
+func TestStartToleratesEmptyUserList(t *testing.T) {
+	var logs syncBuffer
+	originalOutput := log.StandardLogger().Out
+	log.SetOutput(&logs)
+	defer log.SetOutput(originalOutput)
+
+	node := newTestNode(t)
+	instance, tag := newTestInstance(t, node)
+	panel := &fakePanel{node: node}
+	b := New(context.Background(), tag, instance, startableConfig(), node, panel)
+
+	if err := b.Start(); err != nil {
+		t.Fatalf("Start with an empty panel user list = %v, want nil", err)
+	}
+	if got := b.Users(); len(got) != 0 {
+		t.Fatalf("Users() = %+v, want empty", got)
+	}
+	if emails := testUserEmails(t, instance, tag); len(emails) != 0 {
+		t.Fatalf("empty user list registered users with Xray: %v", emails)
+	}
+	// The operator's only signal, and the monitors must keep running so users
+	// are picked up once the panel lists them again.
+	if !strings.Contains(logs.String(), "no entitled users") {
+		t.Fatalf("empty user list was not warned about: %q", logs.String())
+	}
+	for name, p := range map[string]*periodic{
+		"fetch users": b.fetchUsersMonitorPeriodic,
+		"heartbeat":   b.heartbeatMonitorPeriodic,
+	} {
+		if p == nil || p.done == nil {
+			t.Fatalf("%s monitor was not started for an empty user list", name)
+		}
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Builder.Start runs before cmd/server registers its deferred recoverPanic and
+// urfave/cli recovers nothing, so a panic while applying panel data used to
+// take the whole process down with no report of why.
+func TestStartRecoversFromPanicInsteadOfKillingTheProcess(t *testing.T) {
+	panel := &fakePanel{usersPanic: "boom from panel data"}
 	b := New(context.Background(), "vless_1", nil, startableConfig(), nil, panel)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic escaped Start: %v", r)
+		}
+	}()
 	err := b.Start()
-	if err == nil || !strings.Contains(err.Error(), "no valid user") {
-		t.Fatalf("expected empty-user-list error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "boom from panel data") {
+		t.Fatalf("Start error = %v, want it to carry the panic value", err)
 	}
 }
 

@@ -1,10 +1,33 @@
 package service
 
 import (
+	"bytes"
+	"sync"
 	"testing"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
 )
+
+// syncBuffer is a bytes.Buffer that tolerates concurrent use. Tests capture the
+// global log output while a started Builder keeps logging from its monitor
+// goroutines, so a bare bytes.Buffer races between the goroutine's Write and
+// the test's String.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func TestClassifyNodeConfigChangeNoChange(t *testing.T) {
 	if got := classifyNodeConfigChange(true, true); got != nodeConfigChangeNone {

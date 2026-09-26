@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -94,7 +95,20 @@ func New(ctx context.Context, inboundTag string, instance *core.Instance, config
 	}
 }
 
-func (b *Builder) Start() error {
+func (b *Builder) Start() (err error) {
+	// Start applies panel-supplied data (user rows become speed limits, Xray
+	// users, and device limits) and it sits on the process's critical path:
+	// Server.Start calls it before cmd/server's deferred recoverPanic is
+	// registered, and urfave/cli recovers nothing, so a panic here used to
+	// take the whole process down with no chance to report why. Turn it into
+	// an ordinary startup error; Server.Start's failure path still closes
+	// whatever this function managed to start.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic while starting service: %v\n%s", r, debug.Stack())
+		}
+	}()
+
 	if b.config.FetchUsersInterval <= 0 {
 		return fmt.Errorf("invalid FetchUsersInterval: must be > 0, got %v", b.config.FetchUsersInterval)
 	}
@@ -108,7 +122,15 @@ func (b *Builder) Start() error {
 		return err
 	}
 	if len(userList) == 0 {
-		return fmt.Errorf("no valid user for this node; check v2board group/plan assignment")
+		// Not an error. The panel's getAvailableUsers filters on
+		// u+d < transfer_enable, expired_at, and banned, so an empty list is
+		// how it says "nobody in this node's group is currently entitled" --
+		// which is also what an unset group_id produces (whereIn([]) compiles
+		// to WHERE 0=1). Failing here crash-loops the node under systemd
+		// Restart=on-failure and hits the panel twice per retry, while the
+		// same response at runtime is correctly handled as "evict everyone".
+		// Start empty; the fetch monitor picks users up when they appear.
+		log.Warnln("panel lists no entitled users for this node; starting with an empty user list. Check this node's group assignment, and whether every user in the group has expired or exhausted their quota.")
 	}
 	err = b.addNewUser(userList)
 	if err != nil {
