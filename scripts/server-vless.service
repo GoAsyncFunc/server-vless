@@ -5,13 +5,45 @@ After=network.target nss-lookup.target
 [Service]
 Type=simple
 User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+# A VLESS listener only needs to bind its port. CAP_NET_ADMIN bought nothing --
+# routing, firewall and interface changes belong to the host, not to the node --
+# so it is dropped and the service keeps the bind and nothing else.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 ExecStart=/usr/local/bin/vless-node
 Restart=on-failure
 RestartSec=10s
-LimitNOFILE=infinity
+# Bounded instead of infinity. Xray blackholes blocked destinations for 30-90s,
+# so a scan can hold sockets far longer than a normal connection; a finite cap
+# keeps that visible and account-able instead of letting the process grow to
+# whatever the kernel allows.
+LimitNOFILE=1048576
+
+# Sandbox. ProtectSystem=strict mounts everything read-only except /dev, /proc,
+# /sys and the private /tmp, which suits a node that only reads its geo data --
+# reading is unaffected, so --asset-dir keeps working from any path, including
+# the defaults (/usr/local/share/xray, /usr/share/xray, /opt/share/xray).
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# AF_NETLINK is required for interface enumeration; the rest is plain sockets.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target

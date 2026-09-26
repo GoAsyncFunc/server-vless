@@ -12,12 +12,17 @@
 # set cannot drift between the two. The tag and hashes are pinned to make the
 # output reproducible; bump all three together after verifying a new release.
 #
+# Deliberately not read from the environment. A caller that can set all three
+# can point the download at a different release and supply that release's real
+# checksums, which turns the verification into a self-certifying no-op. Change
+# them here, in a reviewed commit, instead.
+#
 # Usage: fetch-geo-assets.sh [DEST_DIR]
 set -eu
 
-GEO_TAG="${GEO_TAG:-202609240010}"
-GEOIP_SHA256="${GEOIP_SHA256:-f3370cf391831bb01e1e662df88596164d136e7d9f81a91c00bae26587e02d72}"
-GEOSITE_SHA256="${GEOSITE_SHA256:-224798ccfaf4fb09be31b63c0807b2969641a74350902c76926a6c0e9d3347ba}"
+GEO_TAG="202609240010"
+GEOIP_SHA256="f3370cf391831bb01e1e662df88596164d136e7d9f81a91c00bae26587e02d72"
+GEOSITE_SHA256="224798ccfaf4fb09be31b63c0807b2969641a74350902c76926a6c0e9d3347ba"
 
 DEST="${1:-.}"
 BASE_URL="https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/${GEO_TAG}"
