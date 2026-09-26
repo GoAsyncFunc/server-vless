@@ -132,7 +132,7 @@ func appFlags() []cli.Flag {
 		},
 		&cli.BoolFlag{
 			Name:        "allow-private-outbound",
-			Usage:       "Security-sensitive: allow users to reach the server's private and loopback IP destinations through the default freedom outbound",
+			Usage:       "Security-sensitive: let the built-in direct egress and panel-provided freedom/direct outbounds reach private and loopback destinations. Outbounds of other protocols, and freedom outbounds using sockopt.dialerProxy, are outside this flag's scope.",
 			EnvVars:     []string{"ALLOW_PRIVATE_OUTBOUND"},
 			Destination: &serviceConfig.AllowPrivateOutbound,
 			Required:    false,
