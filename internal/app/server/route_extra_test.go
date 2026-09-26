@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
+	log "github.com/sirupsen/logrus"
 	"github.com/xtls/xray-core/infra/conf"
 )
 
@@ -151,5 +154,90 @@ func TestBuildRouteOutboundRequiresActionValue(t *testing.T) {
 	}, api.Rules{})
 	if err == nil {
 		t.Fatal("expected error for empty action_value")
+	}
+}
+
+// The private-outbound policy only reaches freedom/direct outbounds and only
+// looks at their settings. Anything else the panel points at an internal
+// address is dialed as given, so the node says so at startup instead of leaving
+// the operator to infer it from a README section.
+func TestUncoveredOutboundReasonFlagsNonFreedomProtocol(t *testing.T) {
+	reason := uncoveredOutboundReason(conf.OutboundDetourConfig{Protocol: "socks"})
+	if reason == "" {
+		t.Fatal("a socks outbound is outside the private-outbound policy and must be reported")
+	}
+}
+
+func TestUncoveredOutboundReasonFlagsDialerProxy(t *testing.T) {
+	// Xray skips finalRules and its default private-IP rule for a
+	// dialer-proxied freedom outbound, and dialerProxy lives in streamSettings
+	// rather than in the settings this policy inspects.
+	out := conf.OutboundDetourConfig{
+		Protocol: "freedom",
+		StreamSetting: &conf.StreamConfig{
+			SocketSettings: &conf.SocketConfig{DialerProxy: "proxy-tag"},
+		},
+	}
+	if reason := uncoveredOutboundReason(out); reason == "" {
+		t.Fatal("a dialer-proxied freedom outbound must be reported")
+	}
+}
+
+func TestUncoveredOutboundReasonAcceptsCoveredOutbounds(t *testing.T) {
+	for _, protocol := range []string{"freedom", "direct", "Freedom", " direct "} {
+		out := conf.OutboundDetourConfig{
+			Protocol:      protocol,
+			StreamSetting: &conf.StreamConfig{SocketSettings: &conf.SocketConfig{DomainStrategy: "UseIPv4"}},
+		}
+		if reason := uncoveredOutboundReason(out); reason != "" {
+			t.Errorf("protocol %q should be covered, got reason %q", protocol, reason)
+		}
+	}
+}
+
+func TestUncoveredOutboundReasonToleratesMissingStreamSettings(t *testing.T) {
+	for name, out := range map[string]conf.OutboundDetourConfig{
+		"no stream settings": {Protocol: "freedom"},
+		"no socket settings": {Protocol: "freedom", StreamSetting: &conf.StreamConfig{}},
+		"blank dialer proxy": {Protocol: "freedom", StreamSetting: &conf.StreamConfig{SocketSettings: &conf.SocketConfig{DialerProxy: "  "}}},
+	} {
+		if reason := uncoveredOutboundReason(out); reason != "" {
+			t.Errorf("%s: expected no reason, got %q", name, reason)
+		}
+	}
+}
+
+func TestBuildRouteOutboundWarnsAboutOutboundOutsidePrivatePolicy(t *testing.T) {
+	useGeoAssets(t)
+	var logs bytes.Buffer
+	originalOutput := log.StandardLogger().Out
+	log.SetOutput(&logs)
+	defer log.SetOutput(originalOutput)
+
+	if _, err := buildRouteConfigWithPolicy([]api.Route{
+		{Id: 11, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"socks-out","protocol":"socks","settings":{"servers":[{"address":"10.0.0.1","port":1080}]}}`},
+	}, api.Rules{}, false); err != nil {
+		t.Fatalf("a socks outbound should build: %v", err)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "route 11") || !strings.Contains(got, "--allow-private-outbound's scope") {
+		t.Fatalf("uncovered outbound was not named in a warning: %q", got)
+	}
+}
+
+func TestBuildRouteOutboundStaysQuietWhenPrivateOutboundIsAllowed(t *testing.T) {
+	useGeoAssets(t)
+	var logs bytes.Buffer
+	originalOutput := log.StandardLogger().Out
+	log.SetOutput(&logs)
+	defer log.SetOutput(originalOutput)
+
+	if _, err := buildRouteConfigWithPolicy([]api.Route{
+		{Id: 12, Action: api.RouteActionDefaultOut, ActionValue: `{"tag":"socks-out","protocol":"socks","settings":{"servers":[{"address":"10.0.0.1","port":1080}]}}`},
+	}, api.Rules{}, true); err != nil {
+		t.Fatalf("a socks outbound should build: %v", err)
+	}
+	if got := logs.String(); strings.Contains(got, "--allow-private-outbound's scope") {
+		t.Fatalf("scope warning must not fire once the flag is on: %q", got)
 	}
 }

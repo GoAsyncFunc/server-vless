@@ -640,6 +640,23 @@ func validateRouteOutboundPolicy(route api.Route, outbound conf.OutboundDetourCo
 	return nil
 }
 
+// uncoveredOutboundReason reports why --allow-private-outbound does not restrict
+// this outbound, or "" when it does. The flag only reaches freedom/direct
+// outbounds and only looks at their settings, so two shapes slip past it, and
+// an operator treating the flag as a fence around panel egress should hear
+// about them at startup.
+func uncoveredOutboundReason(outbound conf.OutboundDetourConfig) string {
+	protocol := strings.ToLower(strings.TrimSpace(outbound.Protocol))
+	if protocol != "freedom" && protocol != "direct" {
+		return fmt.Sprintf("protocol %q is not freedom or direct, so the node dials wherever the panel points it", outbound.Protocol)
+	}
+	if outbound.StreamSetting != nil && outbound.StreamSetting.SocketSettings != nil &&
+		strings.TrimSpace(outbound.StreamSetting.SocketSettings.DialerProxy) != "" {
+		return "sockopt.dialerProxy is set, which makes Xray skip finalRules and its default private-IP rule"
+	}
+	return ""
+}
+
 func buildRouteOutbound(route api.Route, seenTags map[string]struct{}, allowPrivateOutbound bool) (*core.OutboundHandlerConfig, string, error) {
 	if strings.TrimSpace(route.ActionValue) == "" {
 		return nil, "", fmt.Errorf("route %d %s action_value is required", route.Id, route.Action)
@@ -650,6 +667,13 @@ func buildRouteOutbound(route api.Route, seenTags map[string]struct{}, allowPriv
 	}
 	if err := validateRouteOutboundPolicy(route, outbound, allowPrivateOutbound); err != nil {
 		return nil, "", err
+	}
+	// Only worth saying while the flag is off: with it on the node has already
+	// opted into private access, so scope is no longer the interesting part.
+	if !allowPrivateOutbound {
+		if reason := uncoveredOutboundReason(outbound); reason != "" {
+			log.Warnf("route %d outbound is outside --allow-private-outbound's scope: %s", route.Id, reason)
+		}
 	}
 	if outbound.Tag == "" {
 		outbound.Tag = fmt.Sprintf("route_%d", route.Id)
