@@ -3,7 +3,9 @@ name: Docker
 on:
   push:
     branches: [ "main" ]
-    tags: [ 'v*.*.*' ]
+    # Same glob as release.yml. A narrower one here meant a tag like "v1.0"
+    # published binaries without an image, with nothing failing to say so.
+    tags: [ 'v*' ]
   pull_request:
     branches: [ "main" ]
 

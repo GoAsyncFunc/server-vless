@@ -11,7 +11,7 @@
 - `internal/app/server/server.go` — DNS / routing / policy config built via `conf.*`
 - `internal/pkg/service/{builder,inboundbuilder,outboundbuilder,userbuilder}.go` — produces Xray protobuf and drives Xray feature managers
 - `internal/pkg/dispatcher/default.go` — implements Xray's `routing.Dispatcher` interface to add per-user accounting
-- `cmd/server/main.go` — boots `core.Instance`
+- `internal/app/server/server.go` — boots `core.Instance`
 
 This tight coupling means the project's correctness, test surface, and release cadence are bound to Xray-core's. There is recurring user interest in:
 
@@ -44,7 +44,7 @@ Trigger conditions for a follow-up RFC and implementation:
 Accepted:
 
 - We pay continued coupling to Xray-core. Upstream breaking changes propagate through `service/builder.go` and `app/server/server.go`.
-- Kernel-dependent code (`Start`, `loadCore`, `reload`, `addUsers`, `reportTraffics`) remains hard to unit-test without an integration harness; coverage there will plateau without further refactoring.
+- Kernel-dependent code (`Start`, `loadCore`, `checkNodeConfigMonitor`, `addUsers`, `reportTrafficsMonitor`) remains hard to unit-test without an integration harness; coverage there will plateau without further refactoring.
 
 Mitigated:
 

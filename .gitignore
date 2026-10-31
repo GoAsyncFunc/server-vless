@@ -1,9 +1,15 @@
 # Binaries
 /server
+/vless-node
+build/vless-node-*
 *.exe
 *.dll
 *.so
 *.dylib
+
+# Build and test artifacts
+coverage.out
+*.test
 
 # Python tooling
 __pycache__/

@@ -21,7 +21,7 @@ retain their precedence over that fallback.
   from in-flight connections, and serialize counter collection with lifecycle
   changes and other reports. Report acknowledgement subtracts only sent bytes.
 - Send `{}` to `/push` during idle cycles through a validated panel-client wrapper
-  (UniProxy 0.1.1 skips empty traffic). Cap the reporting interval at 120 seconds
+  (UniProxy 0.1.4 skips empty traffic). Cap the reporting interval at 120 seconds
   because panel node health becomes stale after 300 seconds. No heartbeat retries
   or redirects that could duplicate accounting or expose credentials.
 - Use `device_limit` for atomic, per-node unique-source-IP admission. Multiple
@@ -76,8 +76,8 @@ Observed remotely:
   context. Repeated Close calls do not duplicate the final report. Failed reports
   return an error and keep pending counters in memory.
 - Docker dependency download is cached separately from source; `.dockerignore`
-  excludes Git metadata and common local secrets/artifacts. Runtime Alpine is
-  pinned to the 3.23 release line (not an immutable digest).
+  excludes Git metadata and common local secrets/artifacts. Runtime Alpine and
+  the build image are both pinned by digest, not only by tag.
 
 Added tests cover expired local credits with remote occupancy, retry after a
 callback error, waiting for an active callback, cancellation of an in-flight

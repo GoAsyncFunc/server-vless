@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags:
+      # Keep in step with docker-publish.yml: a tag that reaches one workflow
+      # and not the other ships half a release.
       - 'v*'
 
 # Least privilege for the build job, which only reads the repository. The

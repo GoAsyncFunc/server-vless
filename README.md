@@ -26,13 +26,13 @@ Optional runtime controls:
 | `--allow-private-outbound` | `ALLOW_PRIVATE_OUTBOUND` | `false` | Let the built-in direct egress and panel-provided `freedom`/`direct` outbounds reach private and loopback destinations. Not a complete fence around panel egress — see [private destination policy](#private-destination-policy). |
 | `--domain_strategy` | `DOMAIN_STRATEGY` | `UseIPv4v6` | Freedom outbound domain strategy. |
 
-`geoip.dat` is required: the direct egress blocks private destinations with Xray's `geoip:private` attribute, so the node refuses to start when the file cannot be read. `geosite.dat` is only needed when a route or the panel DNS uses a `geosite:` attribute, and its absence is reported when such a route is built. Both files are resolved from `--asset-dir`, then the executable directory, then `/usr/local/share/xray/`, `/usr/share/xray/`, and `/opt/share/xray/`; release archives ship both beside the binary.
+`geoip.dat` is required: the direct egress blocks private destinations with Xray's `geoip:private` attribute, so the node refuses to start when the file cannot be read. `geosite.dat` is only needed when a route or the panel DNS uses a `geosite:` attribute, and its absence is reported when such a route is built. Both files are resolved from `--asset-dir` (or, when that flag is unset, the executable's own directory), then `/usr/local/share/xray/`, `/usr/share/xray/`, and `/opt/share/xray/`; release archives ship both beside the binary.
 
 `configs/conf.yaml` is an example-only file. The current `cmd/server` entrypoint does not load it; runtime settings come from CLI/env flags and UniProxy panel data.
 
 ## UniProxy compatibility
 
-The module currently pins `github.com/GoAsyncFunc/uniproxy v0.1.1`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
+The module currently pins `github.com/GoAsyncFunc/uniproxy v0.1.4`. Local or upstream UniProxy structure changes do not affect this repository until the dependency version or a local `replace` directive is changed.
 
 The code imports the UniProxy public facade at `github.com/GoAsyncFunc/uniproxy/pkg`. If a future UniProxy release removes that facade or renames exported models, update the imports and API model references together.
 

@@ -3,7 +3,9 @@
 ## Dependency
 
 - Fork: `GoAsyncFunc/Xray-core`
-- Commit: `52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120`
+- Commit: `52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120` — the commit this validation
+  ran against. `go.mod` has moved on since; its `replace` directive is the
+  authoritative pin.
 - Go: 1.27
 
 ## Compatibility changes
