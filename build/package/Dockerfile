@@ -1,9 +1,9 @@
 # Build go
 # Base images are pinned by digest as well as tag: the tag is mutable, and this
 # stage ends up inside every published image.
-# Go 1.27.1 is the toolchain go.mod pins; keep the tag, this digest and that
+# Go 1.27.3 is the toolchain go.mod pins; keep the tag, this digest and that
 # line on the same patch release.
-FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 
 WORKDIR /app
 
