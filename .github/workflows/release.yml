@@ -30,11 +30,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Same Go as CI and the Dockerfile: the toolchain line in go.mod.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test -v ./...

@@ -2,6 +2,8 @@ module github.com/GoAsyncFunc/server-vless
 
 go 1.27
 
+toolchain go1.27.1
+
 require (
 	github.com/GoAsyncFunc/uniproxy v0.1.4
 	github.com/juju/ratelimit v1.0.2

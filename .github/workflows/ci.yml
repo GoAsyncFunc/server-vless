@@ -29,11 +29,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The Go version is the toolchain line in go.mod, so this workflow, the
+      # release workflow and the Dockerfile cannot drift apart. check-latest
+      # used to float these jobs to the newest 1.27.x -- 1.27.3 by the end of
+      # October -- while the image shipped 1.27.1.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version-file: go.mod
 
       # The v2 line is required, not cosmetic: v1 cannot parse Go 1.27 source,
       # which is what the old commented-out step was waiting on. Pinned to the
@@ -54,8 +57,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version-file: go.mod
 
       - name: Download dependencies
         run: go mod download
@@ -79,8 +81,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.27'
-          check-latest: true
+          go-version-file: go.mod
 
       # actionlint ships no GitHub Action, so this goes through the Makefile
       # instead of repeating the version here. shellcheck is preinstalled on

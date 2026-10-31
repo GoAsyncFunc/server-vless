@@ -63,3 +63,5 @@ Both gaps need someone able to edit the panel's route configuration. If that acc
 Each tag publishes `vless-node-<os>-<arch>.tar.gz`, which contains `vless-node`, `geoip.dat`, and `geosite.dat` — unpack it into one directory and the node finds its assets without extra flags. The bare `vless-node-<os>-<arch>` binary is published alongside it for existing install scripts; those installs must supply `geoip.dat` themselves (see `--asset-dir` above). The Docker image already carries both files under `/usr/local/share/xray/`.
 
 Both geo files are downloaded and sha256-verified at build time by `build/package/fetch-geo-assets.sh`, which the release workflow and the Dockerfile share.
+
+Every artifact is built with the Go toolchain pinned in `go.mod` (`toolchain go1.27.1`). CI and the release workflow read it through `go-version-file`, and the Dockerfile's builder image is the matching `golang:1.27.1-alpine` digest, so the three cannot drift apart.
