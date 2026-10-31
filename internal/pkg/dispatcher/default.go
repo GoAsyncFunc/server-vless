@@ -629,6 +629,12 @@ type RateLimitedReader struct {
 
 func (r *RateLimitedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	mb, err := r.Reader.ReadMultiBuffer()
+	if mb.IsEmpty() {
+		// Nothing to meter. A failed or empty read must neither block on the
+		// limiter nor have its error -- io.EOF included -- replaced by a
+		// cancellation error from a wait that had nothing to wait for.
+		return mb, err
+	}
 	if waitErr := limiter.Wait(r.Context, r.Email, int64(mb.Len())); waitErr != nil {
 		buf.ReleaseMulti(mb)
 		return nil, waitErr
