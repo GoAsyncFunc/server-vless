@@ -44,7 +44,7 @@ User list changes and supported inbound-only node changes are refreshed by runti
 
 Device limits are enforced per source IP for new connections, using local reservations and the panel's periodically refreshed `alivelist`. Cross-node counts are eventually consistent, not an atomic global quota. Speed changes apply to existing connections. See [runtime compatibility fixes and test boundaries](docs/panel-runtime-fixes.md).
 
-For systemd installs, the service starts `/usr/local/bin/vless-node`, matching Docker and release artifacts.
+For systemd installs, the unit at `scripts/server-vless.service` starts `/usr/local/bin/vless-node`, matching the Docker and release artifacts, and reads every setting from `/etc/server-vless/env`: the unit refuses to start while that file is missing. Copy `scripts/server-vless.env.example` there with `install -D -m 0600`, fill in `API`, `TOKEN` and `NODE`, then enable the unit. Because the unit hides `/root`, TLS certificates have to live outside the home directories, for example under `/etc/server-vless/certs`, with `CERT_FILE` and `KEY_FILE` pointing at them.
 
 ## Private destination policy
 

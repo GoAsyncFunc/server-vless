@@ -11,6 +11,12 @@ User=root
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
+# All runtime settings come from this file, which must set at least API, TOKEN
+# and NODE. Without the leading "-" systemd refuses to start the unit while the
+# file is missing -- a clearer failure than the binary exiting with "required
+# flag(s) not set: api, token, node" every RestartSec. Every key is documented
+# in scripts/server-vless.env.example.
+EnvironmentFile=/etc/server-vless/env
 ExecStart=/usr/local/bin/vless-node
 Restart=on-failure
 RestartSec=10s
@@ -25,6 +31,10 @@ LimitNOFILE=1048576
 # reading is unaffected, so --asset-dir keeps working from any path, including
 # the defaults (/usr/local/share/xray, /usr/share/xray, /opt/share/xray).
 ProtectSystem=strict
+# ProtectHome=true hides /root, so the --cert-file/--key-file defaults under
+# /root/.cert cannot be read from inside the unit. Keep certificates outside
+# the home directories, for example under /etc/server-vless, and point
+# CERT_FILE/KEY_FILE in the environment file at them.
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
