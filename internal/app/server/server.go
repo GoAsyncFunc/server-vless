@@ -339,7 +339,6 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 		serial.ToTypedMessage(pbPolicyConfig),
 		serial.ToTypedMessage(&stats.Config{}),
 		serial.ToTypedMessage(&dispatcher.Config{}),
-		serial.ToTypedMessage(&proxyman.InboundConfig{}),
 		serial.ToTypedMessage(&proxyman.OutboundConfig{}),
 		serial.ToTypedMessage(pbDnsConfig),
 	}
@@ -347,6 +346,12 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	if routeConfig.router != nil {
 		appMsgs = append(appMsgs, serial.ToTypedMessage(routeConfig.router))
 	}
+
+	// Initialize the inbound module last, matching Xray-core v26.10.29 (#7284):
+	// the manager starts accepting the moment its feature starts, so the
+	// dispatcher, the outbound manager and routing all have to be running
+	// first or an early connection lands in a half-built core.
+	appMsgs = append(appMsgs, serial.ToTypedMessage(&proxyman.InboundConfig{}))
 
 	pbCoreConfig := &core.Config{
 		App:      appMsgs,
