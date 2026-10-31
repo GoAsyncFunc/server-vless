@@ -46,6 +46,10 @@ Device limits are enforced per source IP for new connections, using local reserv
 
 For systemd installs, the unit at `scripts/server-vless.service` starts `/usr/local/bin/vless-node`, matching the Docker and release artifacts, and reads every setting from `/etc/server-vless/env`: the unit refuses to start while that file is missing. Copy `scripts/server-vless.env.example` there with `install -D -m 0600`, fill in `API`, `TOKEN` and `NODE`, then enable the unit. Because the unit hides `/root`, TLS certificates have to live outside the home directories, for example under `/etc/server-vless/certs`, with `CERT_FILE` and `KEY_FILE` pointing at them.
 
+## Shutdown
+
+On SIGINT or SIGTERM the node stops its background tasks and waits up to 10 s for them, removes the listener, sends one final traffic report inside that same 10 s budget, then closes the Xray core with another 10 s cap. Give the process at least 30 s before SIGKILL, or the final report, and with it up to one report interval of traffic, is lost. Docker's default stop grace period is only 10 s, so use `docker stop -t 30` or set `stop_grace_period: 30s` in Compose. Kubernetes' default `terminationGracePeriodSeconds` of 30 s and systemd's default `TimeoutStopSec` of 90 s already cover it.
+
 ## Private destination policy
 
 By default the node keeps proxy users off the server's own private and loopback addresses. `--allow-private-outbound` relaxes two things:
