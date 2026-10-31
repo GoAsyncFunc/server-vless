@@ -162,3 +162,59 @@ func tlsClientHelloSNI(name string) []byte {
 	recordLen := len(handshake)
 	return append([]byte{0x16, 0x03, 0x01, byte(recordLen >> 8), byte(recordLen)}, handshake...)
 }
+
+// The HTTP sniffer names its protocol "http1" or "http2"; the inbound config
+// says "http". Upstream matches the two by prefix. An exact comparison here
+// meant plain-HTTP sessions kept their IP destination, so the panel's domain
+// rules never saw them.
+func TestSniffDestinationOverridesHTTP1ForHTTPConfig(t *testing.T) {
+	d := &DefaultDispatcher{}
+	ob := &session.Outbound{Target: net.TCPDestination(net.ParseAddress("203.0.113.1"), 80)}
+	content := &session.Content{SniffingRequest: session.SniffingRequest{
+		Enabled:                        true,
+		OverrideDestinationForProtocol: []string{"http", "tls", "quic"},
+	}}
+	request := "GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: curl/8.0\r\n\r\n"
+	reader := &testTimeoutReader{mb: buf.MultiBuffer{buf.FromBytes([]byte(request))}}
+
+	_, destination := d.sniffDestination(context.Background(), reader, ob.Target, ob, content)
+
+	if got, want := content.Protocol, "http1"; got != want {
+		t.Fatalf("protocol = %q, want %q", got, want)
+	}
+	if got, want := destination.Address.String(), "example.com"; got != want {
+		t.Fatalf("destination = %q, want the sniffed Host %q", got, want)
+	}
+	if got, want := ob.Target.Address.String(), "example.com"; got != want {
+		t.Fatalf("target = %q, want %q", got, want)
+	}
+}
+
+type fakeSniffResult struct{ protocol, domain string }
+
+func (r fakeSniffResult) Protocol() string { return r.protocol }
+func (r fakeSniffResult) Domain() string   { return r.domain }
+
+func TestShouldOverrideMatchesProtocolByPrefixBothWays(t *testing.T) {
+	d := &DefaultDispatcher{}
+	dest := net.TCPDestination(net.ParseAddress("203.0.113.1"), 80)
+	cases := []struct {
+		sniffed    string
+		configured []string
+		want       bool
+	}{
+		{"http1", []string{"http"}, true},
+		{"http2", []string{"http"}, true},
+		{"http", []string{"http1"}, true},
+		{"tls", []string{"tls"}, true},
+		{"quic", []string{"http", "tls", "quic"}, true},
+		{"http1", []string{"tls"}, false},
+		{"bittorrent", []string{"http", "tls", "quic"}, false},
+	}
+	for _, c := range cases {
+		req := session.SniffingRequest{Enabled: true, OverrideDestinationForProtocol: c.configured}
+		if got := d.shouldOverride(fakeSniffResult{c.sniffed, "example.com"}, req, dest); got != c.want {
+			t.Errorf("shouldOverride(%q, %v) = %v, want %v", c.sniffed, c.configured, got, c.want)
+		}
+	}
+}

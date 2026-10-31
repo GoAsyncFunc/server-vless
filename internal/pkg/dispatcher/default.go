@@ -312,9 +312,14 @@ func (d *DefaultDispatcher) shouldOverride(result SniffResult, request session.S
 	if request.ExcludeForIP != nil && destination.Address.Family().IsIP() && request.ExcludeForIP.Match(destination.Address.IP()) {
 		return false
 	}
+	// Match by prefix in both directions, as upstream does. The HTTP sniffer
+	// reports "http1" or "http2" while the inbound config says "http", so an
+	// exact comparison never fired for plain HTTP: the sniffed Host was thrown
+	// away, the session kept its IP destination, and every domain rule on the
+	// panel missed HTTP traffic while the sniffing budget was still spent.
 	protocolString := result.Protocol()
 	for _, p := range request.OverrideDestinationForProtocol {
-		if protocolString == p {
+		if strings.HasPrefix(protocolString, p) || strings.HasPrefix(p, protocolString) {
 			return true
 		}
 	}
