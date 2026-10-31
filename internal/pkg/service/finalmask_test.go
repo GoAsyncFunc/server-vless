@@ -20,6 +20,9 @@ func TestBuildLegacyKCPMasks(t *testing.T) {
 		{name: "wechat-video maps to wechat", settings: `{"header":{"type":"wechat-video"}}`, wantSettings: []string{`{"header":"wechat"}`}},
 		{name: "dtls", settings: `{"header":{"type":"dtls"}}`, wantSettings: []string{`{"header":"dtls"}`}},
 		{name: "wireguard", settings: `{"header":{"type":"wireguard"}}`, wantSettings: []string{`{"header":"wireguard"}`}},
+		{name: "dns", settings: `{"header":{"type":"dns"}}`, wantSettings: []string{`{"header":"dns"}`}},
+		{name: "dns carries its domain", settings: `{"header":{"type":"dns","domain":"example.com"}}`, wantSettings: []string{`{"header":"dns","value":"example.com"}`}},
+		{name: "domain is ignored for other headers", settings: `{"header":{"type":"srtp","domain":"example.com"}}`, wantSettings: []string{`{"header":"srtp"}`}},
 		{name: "seed only", settings: `{"seed":"pw"}`, wantSettings: []string{`{"value":"pw"}`}},
 		{name: "header and seed order", settings: `{"header":{"type":"srtp"},"seed":"pw"}`, wantSettings: []string{`{"value":"pw"}`, `{"header":"srtp"}`}},
 	}

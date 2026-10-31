@@ -12,17 +12,23 @@ import (
 type legacyKCPMaskFields struct {
 	Header *struct {
 		Type string `json:"type"`
+		// Only the dns header reads it: the domain the fake queries carry.
+		Domain string `json:"domain"`
 	} `json:"header"`
 	Seed string `json:"seed"`
 }
 
-// xray header type -> mkcp-legacy header; "none"/"" means no mask.
+// xray header type -> mkcp-legacy header; "none"/"" means no mask. The fork's
+// mkcp-legacy mask accepts exactly these plus dns, which takes the legacy
+// header's domain as its value and, like upstream, falls back to
+// www.baidu.com when that is empty.
 var legacyHeaderToMkcp = map[string]string{
 	"srtp":         "srtp",
 	"utp":          "utp",
 	"wechat-video": "wechat",
 	"dtls":         "dtls",
 	"wireguard":    "wireguard",
+	"dns":          "dns",
 }
 
 // wrap a payload as a mkcp-legacy mask.
@@ -55,9 +61,14 @@ func buildLegacyKCPMasks(networkSettings []byte) (*conf.FinalMask, error) {
 		if !ok {
 			return nil, fmt.Errorf("unsupported mkcp header type %q", fields.Header.Type)
 		}
-		m, err := mkcpLegacyMask(struct {
+		payload := struct {
 			Header string `json:"header"`
-		}{Header: mapped})
+			Value  string `json:"value,omitempty"`
+		}{Header: mapped}
+		if mapped == "dns" {
+			payload.Value = fields.Header.Domain
+		}
+		m, err := mkcpLegacyMask(payload)
 		if err != nil {
 			return nil, err
 		}
