@@ -13,7 +13,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 )
 
-replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20261029083850-0afec66085a8
+replace github.com/xtls/xray-core => github.com/GoAsyncFunc/Xray-core v0.0.0-20261031132019-a4a3dff5b20c
 
 require (
 	github.com/andybalholm/brotli v1.2.3 // indirect
