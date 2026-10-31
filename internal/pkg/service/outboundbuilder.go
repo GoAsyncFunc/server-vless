@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 
-	api "github.com/GoAsyncFunc/uniproxy/pkg"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf"
 )
@@ -25,9 +24,8 @@ import (
 const privateIPRule = "geoip:private"
 
 // OutboundBuilder builds the freedom outbound handler used as the "direct"
-// egress. nodeInfo is reserved for future per-node outbound customization
-// (e.g., bind address from node metadata) and is currently unused.
-func OutboundBuilder(config *Config, _ *api.NodeInfo) (*core.OutboundHandlerConfig, error) {
+// egress.
+func OutboundBuilder(config *Config) (*core.OutboundHandlerConfig, error) {
 	outboundDetourConfig := &conf.OutboundDetourConfig{}
 	outboundDetourConfig.Protocol = "freedom"
 	outboundDetourConfig.Tag = "direct"

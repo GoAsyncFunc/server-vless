@@ -7,9 +7,8 @@ import (
 	"github.com/xtls/xray-core/core"
 )
 
-// versionCommand implements the `vless-node version` subcommand.
-// Kept in its own file so additional subcommands (e.g. validate, health)
-// can follow the same per-file pattern.
+// versionCommand implements the `vless-node version` subcommand. It lives in
+// its own file so any later subcommand can follow the same per-file pattern.
 var versionCommand = &cli.Command{
 	Name:    "version",
 	Aliases: []string{"v"},

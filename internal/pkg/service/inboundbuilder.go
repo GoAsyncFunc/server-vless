@@ -123,7 +123,7 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 			err = buildXHTTPConfig(streamSetting, vlessInfo)
 		case "httpupgrade":
 			err = buildHTTPUpgradeConfig(streamSetting, vlessInfo)
-		case "kcp", "mkcp":
+		case "kcp":
 			err = buildKCPConfig(streamSetting, vlessInfo)
 		default:
 			// Dropping the settings on the floor would start a listener that
@@ -195,11 +195,7 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 		}
 		realitySettings.Dest = json.RawMessage(fullDestBytes)
 
-		xver := vlessInfo.TlsSettings.Xver
-		if xver == 0 {
-			xver = vlessInfo.RealityConfig.Xver
-		}
-		realitySettings.Xver = xver
+		realitySettings.Xver = vlessInfo.TlsSettings.Xver
 
 		streamSetting.REALITYSettings = realitySettings
 	default:

@@ -14,7 +14,7 @@ func buildUser(tag string, userInfo []api.UserInfo, nodeFlow string) (users []*p
 	for i, user := range userInfo {
 		vlessAccount := &vless.Account{
 			Id:   user.Uuid,
-			Flow: nodeFlow, // Correctly use the node flow from parameters
+			Flow: nodeFlow,
 		}
 		account := serial.ToTypedMessage(vlessAccount)
 		users[i] = &protocol.User{

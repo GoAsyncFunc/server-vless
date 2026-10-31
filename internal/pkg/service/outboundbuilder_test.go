@@ -29,7 +29,7 @@ func assertOutboundDomainStrategy(t *testing.T, outbound *core.OutboundHandlerCo
 
 func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
 	useGeoAssets(t)
-	outbound, err := OutboundBuilder(&Config{}, nil)
+	outbound, err := OutboundBuilder(&Config{})
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestOutboundBuilderDefaultsIPv4FirstDualStack(t *testing.T) {
 
 func TestOutboundBuilderNilConfigUsesDefaultDomainStrategy(t *testing.T) {
 	useGeoAssets(t)
-	outbound, err := OutboundBuilder(nil, nil)
+	outbound, err := OutboundBuilder(nil)
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestOutboundBuilderNilConfigUsesDefaultDomainStrategy(t *testing.T) {
 
 func TestOutboundBuilderAllowsPrivateOutboundWhenEnabled(t *testing.T) {
 	useGeoAssets(t)
-	outbound, err := OutboundBuilder(&Config{AllowPrivateOutbound: true}, nil)
+	outbound, err := OutboundBuilder(&Config{AllowPrivateOutbound: true})
 	if err != nil {
 		t.Fatalf("OutboundBuilder returned error: %v", err)
 	}

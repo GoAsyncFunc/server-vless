@@ -246,3 +246,9 @@ func TestBuildRouteConfigLegacyRules(t *testing.T) {
 		t.Fatalf("rule count = %d, want 2", got)
 	}
 }
+
+// buildRouteConfig is the entry point the route tests were written against:
+// the default policy of not allowing private destinations.
+func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, error) {
+	return buildRouteConfigWithPolicy(routes, legacy, false)
+}

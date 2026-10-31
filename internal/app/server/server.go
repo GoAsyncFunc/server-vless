@@ -204,7 +204,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("build inbound config error: %w", err)
 	}
 
-	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig, nodeConfig)
+	outboundHandlerConfig, err := service.OutboundBuilder(s.serviceConfig)
 	if err != nil {
 		return fmt.Errorf("build outbound config error: %w", annotateGeoAssetError(err))
 	}
@@ -584,10 +584,6 @@ type routeBuildResult struct {
 	outbounds       []*core.OutboundHandlerConfig
 	needsBlock      bool
 	defaultOutbound *core.OutboundHandlerConfig
-}
-
-func buildRouteConfig(routes []api.Route, legacy api.Rules) (*routeBuildResult, error) {
-	return buildRouteConfigWithPolicy(routes, legacy, false)
 }
 
 func buildRouteConfigWithPolicy(routes []api.Route, legacy api.Rules, allowPrivateOutbound bool) (*routeBuildResult, error) {

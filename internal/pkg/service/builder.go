@@ -184,14 +184,13 @@ func (b *Builder) Start() (err error) {
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = b.config.FetchUsersInterval
 	}
-	if heartbeatInterval > 0 {
-		b.heartbeatMonitorPeriodic = &periodic{
-			Interval: min(heartbeatInterval, 60*time.Second),
-			Execute:  b.heartbeatMonitor,
-		}
-		log.Infoln("Start heartbeat monitoring")
-		b.heartbeatMonitorPeriodic.Start()
+	// FetchUsersInterval was validated above, so the fallback is positive.
+	b.heartbeatMonitorPeriodic = &periodic{
+		Interval: min(heartbeatInterval, 60*time.Second),
+		Execute:  b.heartbeatMonitor,
 	}
+	log.Infoln("Start heartbeat monitoring")
+	b.heartbeatMonitorPeriodic.Start()
 	return nil
 }
 

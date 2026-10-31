@@ -154,24 +154,6 @@ func TestBuildStreamConfigRealityDefaultsDestPortAndDestFromServerName(t *testin
 	}
 }
 
-func TestBuildStreamConfigRealityXverFallback(t *testing.T) {
-	v := &api.VlessNode{
-		Network: "tcp",
-		TlsSettings: api.TlsSettings{
-			ServerName: "example.com",
-			Xver:       0,
-		},
-		RealityConfig: api.RealityConfig{Xver: 7},
-	}
-	stream, err := buildStreamConfig(v, &api.NodeInfo{Security: api.Reality}, &Config{})
-	if err != nil {
-		t.Fatalf("buildStreamConfig returned error: %v", err)
-	}
-	if stream.REALITYSettings == nil || stream.REALITYSettings.Xver != 7 {
-		t.Fatalf("xver = %v, want 7 from RealityConfig fallback", stream.REALITYSettings)
-	}
-}
-
 func TestBuildStreamConfigRealityRejectsEmptyDest(t *testing.T) {
 	// Neither dest nor server name: without the check this built ":443",
 	// which Xray dials as the local host.
