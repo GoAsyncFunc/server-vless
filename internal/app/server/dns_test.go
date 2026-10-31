@@ -273,3 +273,26 @@ func TestBuildDNSConfigKeepsNonNumericDNSMapKeys(t *testing.T) {
 		t.Fatalf("name server count = %d, want the non-numeric key's server", len(cfg.NameServer))
 	}
 }
+
+// Mixed keys must sort the same way no matter how the map iterates. The old
+// comparator decided numeric-versus-string per pair, which is cyclic for keys
+// like these, so sort.Slice's answer depended on its input order.
+func TestCompareDNSMapKeysIsATotalOrderOverMixedKeys(t *testing.T) {
+	keys := []string{"1a", "10", "9", "2", "b", "01", "1"}
+	want := []string{"01", "1", "2", "9", "10", "1a", "b"}
+	// Every rotation of the input: a cyclic comparator gives different answers
+	// for different starting points, a total order gives one.
+	for shift := range keys {
+		in := append(append([]string{}, keys[shift:]...), keys[:shift]...)
+		slices.SortFunc(in, compareDNSMapKeys)
+		if !slices.Equal(in, want) {
+			t.Fatalf("rotation %d: sorted = %v, want %v", shift, in, want)
+		}
+	}
+	// The relation itself, on the triple that used to form a cycle.
+	for _, pair := range [][2]string{{"9", "10"}, {"10", "1a"}, {"9", "1a"}} {
+		if compareDNSMapKeys(pair[0], pair[1]) >= 0 {
+			t.Errorf("compareDNSMapKeys(%q, %q) >= 0, want < 0", pair[0], pair[1])
+		}
+	}
+}

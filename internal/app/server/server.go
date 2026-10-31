@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -407,21 +408,40 @@ func buildDNSConfig(cliDNS string, raw api.RawDNS) (*dns.Config, error) {
 // rather than by position, the order still breaks ties between overlapping
 // rules and decides the fallback rotation. Leaving it random would make one
 // panel config resolve differently on every start.
+// compareDNSMapKeys is the order dnsMapConfig walks the panel's route keys
+// in: every key that is an index comes first, by value, and every other key
+// -- nothing enforces that a key is an index -- follows, as a string.
+//
+// Deciding numeric-versus-string per pair is not a strict weak order. With
+// "9", "10" and "1a": 9 < 10 numerically, "10" < "1a" as strings, yet
+// "1a" < "9" as strings, so the relation is cyclic and sort.Slice hands back
+// whatever order the map happened to iterate in -- the very randomness this
+// sort exists to remove.
+func compareDNSMapKeys(a, b string) int {
+	ai, aErr := strconv.Atoi(a)
+	bi, bErr := strconv.Atoi(b)
+	switch {
+	case aErr == nil && bErr == nil:
+		if c := cmp.Compare(ai, bi); c != 0 {
+			return c
+		}
+		// "01" and "1" name the same index; keep them apart deterministically.
+		return strings.Compare(a, b)
+	case aErr == nil:
+		return -1
+	case bErr == nil:
+		return 1
+	default:
+		return strings.Compare(a, b)
+	}
+}
+
 func dnsMapConfig(dnsMap map[string]map[string]any) (*conf.DNSConfig, error) {
 	keys := make([]string, 0, len(dnsMap))
 	for key := range dnsMap {
 		keys = append(keys, key)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		left, leftErr := strconv.Atoi(keys[i])
-		right, rightErr := strconv.Atoi(keys[j])
-		if leftErr == nil && rightErr == nil {
-			return left < right
-		}
-		// Not every key has to be an index -- nothing enforces it -- so fall
-		// back to a total order over the strings rather than dropping any.
-		return keys[i] < keys[j]
-	})
+	slices.SortFunc(keys, compareDNSMapKeys)
 
 	servers := make([]any, 0, len(keys))
 	for _, key := range keys {
