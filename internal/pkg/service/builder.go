@@ -247,12 +247,9 @@ func (b *Builder) fetchUsersMonitor() error {
 		log.Infof("%d user deleted, %d user added", len(deleted), len(added))
 	}
 	b.userList = newUserList
-	// Refresh per-user speed limits so SpeedLimit changes on existing users
-	// (same ID+UUID) are picked up. Set() is a no-op when unchanged.
-	for _, u := range newUserList {
-		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
-		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
-	}
+	// Speed and device limits were refreshed for the whole list by addNewUser
+	// above, which is also what picks up a changed limit on an existing user;
+	// Set is a no-op when a limit is unchanged.
 	return nil
 }
 
@@ -663,6 +660,21 @@ func (b *Builder) heartbeatMonitor() error {
 }
 
 func (b *Builder) compareUserList(newUsers, oldUsers []api.UserInfo) (deleted, added []api.UserInfo) {
+	// The common cycle: the panel answered 304, or nothing changed, and the two
+	// lists are identical element for element. UserInfo is four scalars, so one
+	// pass settles it without building the two maps below under the lock.
+	if len(newUsers) == len(oldUsers) {
+		same := true
+		for i := range newUsers {
+			if newUsers[i] != oldUsers[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil, nil
+		}
+	}
 	// Index old users by Id for diff; UUID change on the same Id is treated as
 	// a replacement (delete + re-add) so the in-memory Xray user gets the new UUID.
 	oldByID := make(map[int]api.UserInfo, len(oldUsers))
@@ -786,8 +798,9 @@ func (b *Builder) addNewUser(userInfo []api.UserInfo) error {
 	// Register per-user speed limits (mbps=0 is treated as "no limit" and
 	// quietly cleared).
 	for _, u := range userInfo {
-		limiter.Set(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.SpeedLimit)
-		limiter.SetDeviceLimit(buildUserEmail(b.inboundTag, u.Id, u.Uuid), u.DeviceLimit)
+		email := buildUserEmail(b.inboundTag, u.Id, u.Uuid)
+		limiter.Set(email, u.SpeedLimit)
+		limiter.SetDeviceLimit(email, u.DeviceLimit)
 	}
 	return b.addUsers(users, b.inboundTag)
 }
@@ -813,12 +826,14 @@ func (b *Builder) addUsers(users []*protocol.User, tag string) error {
 	}
 
 	for _, user := range users {
+		// Nearly every user is already present on a reconcile cycle; look it
+		// up before paying for the UUID parse and the MemoryUser build.
+		if userManager.GetUser(b.ctx, user.Email) != nil {
+			continue
+		}
 		mUser, err := user.ToMemoryUser()
 		if err != nil {
 			return fmt.Errorf("create memory user: %w", err)
-		}
-		if userManager.GetUser(b.ctx, user.Email) != nil {
-			continue
 		}
 		if err := userManager.AddUser(b.ctx, mUser); err != nil {
 			return fmt.Errorf("add memory user: %w", err)
