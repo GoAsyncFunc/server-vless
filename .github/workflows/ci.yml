@@ -27,14 +27,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # The Go version is the toolchain line in go.mod, so this workflow, the
       # release workflow and the Dockerfile cannot drift apart. It is a pin,
       # not a floor: check-latest used to float these jobs to whatever 1.27.x
       # was newest while the image shipped something else.
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
 
@@ -42,7 +42,7 @@ jobs:
       # which is what the old commented-out step was waiting on. Pinned to the
       # version `make lint_install` installs so local and CI cannot drift.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.14.0
           args: --timeout=5m
@@ -52,10 +52,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
 
@@ -71,15 +71,27 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+      # Pinned, and installed through the module proxy and checksum database
+      # like the other tools. Source mode panics on this module's dependency
+      # graph (x/vuln v1.3.0, "panic: Int" inside the Xray-core fork), and the
+      # binary we ship is the thing the question is about anyway, so scan that.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+
+      - name: govulncheck
+        run: |
+          go build -trimpath -o vless-node ./cmd/server
+          govulncheck -mode binary ./vless-node
+
   workflow-lint:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
 
