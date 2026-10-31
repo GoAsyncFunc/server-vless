@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -77,15 +78,28 @@ func (c *PanelClient) ReportUserTraffic(ctx context.Context, traffic []api.UserT
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.pushURL, bytes.NewBufferString("{}"))
 	if err != nil {
-		return fmt.Errorf("create empty traffic heartbeat")
+		return fmt.Errorf("create empty traffic heartbeat: %w", withoutRequestURL(err))
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("empty traffic heartbeat request failed")
+		return fmt.Errorf("empty traffic heartbeat request failed: %w", withoutRequestURL(err))
 	}
 	defer response.Body.Close()
 	return checkPushAcknowledgement(response)
+}
+
+// withoutRequestURL strips the request URL from a transport error. pushURL
+// carries the node token in its query string and *url.Error prints the whole
+// URL, which is why these errors used to be dropped entirely. The underlying
+// cause -- the dial failure, the timeout, the TLS verification error -- names
+// at most the host and port, so it can be kept.
+func withoutRequestURL(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err
+	}
+	return err
 }
 
 // checkPushAcknowledgement mirrors api.Client.checkReportResponse, which every

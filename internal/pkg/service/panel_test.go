@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,5 +116,35 @@ func TestNewPanelClientRejectsNonTransportDefaultTransport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "http.DefaultTransport") {
 		t.Errorf("error %q does not name http.DefaultTransport", err)
+	}
+}
+
+// The heartbeat used to drop transport errors entirely because *url.Error
+// prints the push URL, token and all. The cause has to survive -- it is what
+// tells a refused connection from a timeout -- while the URL must not.
+func TestEmptyHeartbeatErrorKeepsTheCauseWithoutTheURL(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+
+	c, err := NewPanelClient(&api.Config{APIHost: "http://" + address, NodeID: 1, NodeType: "vless", Key: "secret-heartbeat-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.ReportUserTraffic(context.Background(), nil)
+	if err == nil {
+		t.Fatal("heartbeat to a closed port must fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "dial tcp") {
+		t.Fatalf("error %q should name the transport cause", msg)
+	}
+	for _, leak := range []string{"secret-heartbeat-token", "token=", "/api/"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("error %q leaks the push URL (%q)", msg, leak)
+		}
 	}
 }
