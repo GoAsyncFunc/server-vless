@@ -16,15 +16,17 @@ Optional runtime controls:
 
 | Flag | Environment | Default | Description |
 | --- | --- | --- | --- |
-| `--fetch_users_interval` | `FETCH_USER_INTERVAL` | `60s` | User sync interval. |
-| `--report_traffics_interval` | `REPORT_TRAFFICS_INTERVAL` | `80s` | Traffic report interval (capped at 120s for panel health; idle cycles send an empty push). |
-| `--heartbeat_interval` | `HEARTBEAT_INTERVAL` | `60s` | Online-user heartbeat interval. |
-| `--check_node_interval` | `CHECK_NODE_INTERVAL` | fetch interval | Node config polling interval. |
+| `--fetch-users-interval` | `FETCH_USER_INTERVAL` | `60s` | User sync interval. |
+| `--report-traffics-interval` | `REPORT_TRAFFICS_INTERVAL` | `80s` | Traffic report interval (capped at 120s for panel health; idle cycles send an empty push). |
+| `--heartbeat-interval` | `HEARTBEAT_INTERVAL` | `60s` | Online-user heartbeat interval. |
+| `--check-node-interval` | `CHECK_NODE_INTERVAL` | fetch interval | Node config polling interval. |
 | `--dns` | `DNS` | UniProxy/default DNS | Comma-separated DNS override. |
 | `--asset-dir` | `ASSET_DIR`, `SERVER_VLESS_ASSET_DIR` | empty | Directory containing `geoip.dat` and `geosite.dat`. |
-| `--disable_sniffing` | `DISABLE_SNIFFING` | `false` | Disable inbound sniffing. |
+| `--disable-sniffing` | `DISABLE_SNIFFING` | `false` | Disable inbound sniffing. |
 | `--allow-private-outbound` | `ALLOW_PRIVATE_OUTBOUND` | `false` | Let the built-in direct egress and panel-provided `freedom`/`direct` outbounds reach private and loopback destinations. Not a complete fence around panel egress — see [private destination policy](#private-destination-policy). |
-| `--domain_strategy` | `DOMAIN_STRATEGY` | `UseIPv4v6` | Freedom outbound domain strategy. |
+| `--domain-strategy` | `DOMAIN_STRATEGY` | `UseIPv4v6` | Freedom outbound domain strategy. |
+
+Every flag also accepts its older `snake_case` spelling, and the interval and strategy flags the short aliases `fui`, `rti`, `hbi`, `cni` and `ds`.
 
 `geoip.dat` is required: the direct egress blocks private destinations with Xray's `geoip:private` attribute, so the node refuses to start when the file cannot be read. `geosite.dat` is only needed when a route or the panel DNS uses a `geosite:` attribute, and its absence is reported when such a route is built. Both files are resolved from `--asset-dir` (or, when that flag is unset, the executable's own directory), then `/usr/local/share/xray/`, `/usr/share/xray/`, and `/opt/share/xray/`; release archives ship both beside the binary.
 

@@ -33,18 +33,19 @@ func appFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
 			Name:        "api",
-			Usage:       "Server address",
+			Usage:       "UniProxy or V2Board API base URL, e.g. https://panel.example.com",
 			EnvVars:     []string{"API"},
 			Destination: &apiConfig.APIHost,
 		},
 		&cli.StringFlag{
 			Name:        "token",
-			Usage:       "Token of server API",
+			Usage:       "Server API token",
 			EnvVars:     []string{"TOKEN"},
 			Destination: &apiConfig.Key,
 		},
 		&cli.StringFlag{
-			Name:        "cert_file",
+			Name:        "cert-file",
+			Aliases:     []string{"cert_file"},
 			Usage:       "Cert file",
 			EnvVars:     []string{"CERT_FILE"},
 			Value:       "/root/.cert/server.crt",
@@ -53,7 +54,8 @@ func appFlags() []cli.Flag {
 			Destination: &certConfig.CertFile,
 		},
 		&cli.StringFlag{
-			Name:        "key_file",
+			Name:        "key-file",
+			Aliases:     []string{"key_file"},
 			Usage:       "Key file",
 			EnvVars:     []string{"KEY_FILE"},
 			Value:       "/root/.cert/server.key",
@@ -68,7 +70,8 @@ func appFlags() []cli.Flag {
 			Destination: &apiConfig.NodeID,
 		},
 		&cli.DurationFlag{
-			Name:        "fetch_users_interval, fui",
+			Name:        "fetch-users-interval",
+			Aliases:     []string{"fetch_users_interval", "fui"},
 			Usage:       "API request cycle(fetch users), e.g. 60s",
 			EnvVars:     []string{"FETCH_USER_INTERVAL"},
 			Value:       time.Second * 60,
@@ -77,7 +80,8 @@ func appFlags() []cli.Flag {
 			Destination: &serviceConfig.FetchUsersInterval,
 		},
 		&cli.DurationFlag{
-			Name:        "report_traffics_interval, rti",
+			Name:        "report-traffics-interval",
+			Aliases:     []string{"report_traffics_interval", "rti"},
 			Usage:       "API request cycle(report traffics), e.g. 80s",
 			EnvVars:     []string{"REPORT_TRAFFICS_INTERVAL"},
 			Value:       time.Second * 80,
@@ -86,7 +90,8 @@ func appFlags() []cli.Flag {
 			Destination: &serviceConfig.ReportTrafficsInterval,
 		},
 		&cli.DurationFlag{
-			Name:        "heartbeat_interval, hbi",
+			Name:        "heartbeat-interval",
+			Aliases:     []string{"heartbeat_interval", "hbi"},
 			Usage:       "API request cycle(heartbeat), e.g. 60s",
 			EnvVars:     []string{"HEARTBEAT_INTERVAL"},
 			Value:       time.Second * 60,
@@ -95,14 +100,16 @@ func appFlags() []cli.Flag {
 			Destination: &serviceConfig.HeartbeatInterval,
 		},
 		&cli.DurationFlag{
-			Name:        "check_node_interval, cni",
-			Usage:       "Node config change detection cycle, e.g. 60s. Defaults to fetch_users_interval when unset.",
+			Name:        "check-node-interval",
+			Aliases:     []string{"check_node_interval", "cni"},
+			Usage:       "Node config change detection cycle, e.g. 60s. Defaults to fetch-users-interval when unset.",
 			EnvVars:     []string{"CHECK_NODE_INTERVAL"},
 			Required:    false,
 			Destination: &serviceConfig.CheckNodeInterval,
 		},
 		&cli.StringFlag{
-			Name:        "log_mode",
+			Name:        "log-mode",
+			Aliases:     []string{"log_mode"},
 			Value:       server.LogLevelError,
 			Usage:       "Log mode",
 			EnvVars:     []string{"LOG_LEVEL"},
@@ -124,7 +131,8 @@ func appFlags() []cli.Flag {
 			Required:    false,
 		},
 		&cli.BoolFlag{
-			Name:        "disable_sniffing",
+			Name:        "disable-sniffing",
+			Aliases:     []string{"disable_sniffing"},
 			Usage:       "Disable inbound sniffing for lower connection setup overhead when routing does not need it",
 			EnvVars:     []string{"DISABLE_SNIFFING"},
 			Destination: &serviceConfig.DisableSniffing,
@@ -138,7 +146,8 @@ func appFlags() []cli.Flag {
 			Required:    false,
 		},
 		&cli.StringFlag{
-			Name:        "domain_strategy, ds",
+			Name:        "domain-strategy",
+			Aliases:     []string{"domain_strategy", "ds"},
 			Usage:       "Freedom outbound domain strategy. One of AsIs, UseIP, UseIPv4, UseIPv6, UseIPv4v6, UseIPv6v4, ForceIP, ForceIPv4, ForceIPv6, ForceIPv4v6, ForceIPv6v4. An unsupported value makes the node fail to start.",
 			EnvVars:     []string{"DOMAIN_STRATEGY"},
 			Value:       "UseIPv4v6",

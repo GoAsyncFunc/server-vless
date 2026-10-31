@@ -29,7 +29,7 @@ func main() {
 		Name:      Name,
 		Version:   Version,
 		Copyright: CopyRight,
-		Usage:     "Provide VLESS service for V2Board",
+		Usage:     "Serve a VLESS node for a UniProxy or V2Board panel",
 		Flags:     appFlags(),
 		Before:    setupLogger,
 		Action:    runVlessNode,
