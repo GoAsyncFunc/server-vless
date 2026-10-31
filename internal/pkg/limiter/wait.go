@@ -5,12 +5,36 @@ import (
 	"time"
 )
 
-// Wait looks up the current bucket on every bounded reservation. Existing
-// connections therefore observe changed limits, including unlimited -> limited.
-// Polling also lets cancellation or removing a limit interrupt a queued wait.
+// Wait reserves bytes against the user's current limit. It is the
+// registry-keyed form of Handle.Wait for callers that have no Handle; the
+// data path resolves a Handle once per connection instead of paying the
+// registry lookup on every chunk.
 func Wait(ctx context.Context, email string, bytes int64) error {
-	// Lazily allocate one timer per blocked transfer, not per polling tick.
-	// Unlimited and immediately available paths remain allocation-free.
+	return Lookup(email).Wait(ctx, bytes)
+}
+
+// Wait reserves bytes against the Handle's current limit. Unlimited is the
+// hot path and stays as close to free as a call can be: no defer, no timer,
+// one atomic load. The checks run in the same order as the limited loop, so
+// a cancelled connection stops here just the same.
+func (h *Handle) Wait(ctx context.Context, bytes int64) error {
+	if bytes <= 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if h.bucket.Load() == nil {
+		return nil
+	}
+	return h.waitLimited(ctx, bytes)
+}
+
+// waitLimited polls the limit on every bounded reservation, so a change made
+// while the transfer is blocked -- removed, lowered, or unlimited becoming
+// limited -- and cancellation both interrupt the wait. It allocates one timer
+// per blocked transfer, not per polling tick.
+func (h *Handle) waitLimited(ctx context.Context, bytes int64) error {
 	var timer *time.Timer
 	defer func() {
 		if timer != nil {
@@ -21,7 +45,7 @@ func Wait(ctx context.Context, email string, bytes int64) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		bucket := Bucket(email)
+		bucket := h.bucket.Load()
 		if bucket == nil {
 			return nil
 		}

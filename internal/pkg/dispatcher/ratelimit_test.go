@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/xtls/xray-core/common/buf"
+
+	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 )
 
 type errReader struct{ err error }
@@ -19,7 +21,7 @@ func (r errReader) ReadMultiBuffer() (buf.MultiBuffer, error) { return nil, r.er
 func TestRateLimitedReaderReturnsEmptyReadErrorWithoutWaiting(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	r := &RateLimitedReader{Context: ctx, Email: "limited@example.com", Reader: errReader{err: io.EOF}}
+	r := &RateLimitedReader{Context: ctx, Limit: limiter.Lookup("limited@example.com"), Reader: errReader{err: io.EOF}}
 
 	mb, err := r.ReadMultiBuffer()
 

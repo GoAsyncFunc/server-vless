@@ -12,6 +12,7 @@ package limiter
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/juju/ratelimit"
@@ -29,24 +30,58 @@ const bitsPerMbps = 1_000_000 / 8
 // "effectively unlimited" instead of taking the process down.
 const maxMbps = math.MaxInt64 / bitsPerMbps
 
-type entry struct {
-	mbps   int
-	bucket *ratelimit.Bucket
+// Handle is one user's live speed limit. Every connection of the user holds
+// the same Handle, resolved once by Lookup when the connection opens, and
+// reads the current bucket with one atomic load per chunk -- no registry
+// lock on the data path. Set and Remove swap the bucket, so a connection
+// that is already open sees a new limit, a removed one, and the step from
+// unlimited to limited on its next chunk.
+type Handle struct {
+	bucket atomic.Pointer[ratelimit.Bucket]
+	// mbps is the limit the bucket was built for. Guarded by mu; only Set
+	// reads it, to leave a bucket alone when its limit did not change.
+	mbps int
 }
 
 var (
 	mu      sync.RWMutex
-	buckets = map[string]*entry{}
+	handles = map[string]*Handle{}
 )
 
+// Lookup returns the user's Handle, creating an unlimited one when the user
+// has none yet. Creating it is what lets a limit registered after the
+// connection opened still reach that connection: Set finds this Handle and
+// swaps the bucket in rather than starting one nobody holds.
+func Lookup(email string) *Handle {
+	mu.RLock()
+	h, ok := handles[email]
+	mu.RUnlock()
+	if ok {
+		return h
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if h, ok = handles[email]; ok {
+		return h
+	}
+	h = &Handle{}
+	handles[email] = h
+	return h
+}
+
 // Set registers the per-user speed limit. mbps <= 0 is treated as "no limit"
-// and removes any existing entry. If the limit is unchanged the bucket is
-// left alone to preserve the shared token balance.
+// and clears the bucket while keeping the Handle, so the user's open
+// connections keep observing later changes. If the limit is unchanged the
+// bucket is left alone to preserve the shared token balance.
 func Set(email string, mbps int) {
 	mu.Lock()
 	defer mu.Unlock()
+	h := handles[email]
 	if mbps <= 0 {
-		delete(buckets, email)
+		if h != nil {
+			h.mbps = 0
+			h.bucket.Store(nil)
+		}
 		return
 	}
 	// Clamp before the comparison below so two different absurd limits resolve
@@ -54,32 +89,44 @@ func Set(email string, mbps int) {
 	if mbps > maxMbps {
 		mbps = maxMbps
 	}
-	if e, ok := buckets[email]; ok && e.mbps == mbps {
+	if h == nil {
+		h = &Handle{}
+		handles[email] = h
+	} else if h.mbps == mbps {
 		return
 	}
 	bps := int64(mbps) * bitsPerMbps
-	buckets[email] = &entry{
-		mbps:   mbps,
-		bucket: ratelimit.NewBucketWithQuantum(time.Second, bps, bps),
+	h.mbps = mbps
+	h.bucket.Store(ratelimit.NewBucketWithQuantum(time.Second, bps, bps))
+}
+
+// Remove forgets the user and clears any bucket, so connections of a removed
+// user that are still open run unlimited until they are torn down. A later
+// Set for the same email starts a fresh Handle those connections do not see,
+// which is right: the identity they belong to is gone. Safe to call when no
+// entry exists.
+func Remove(email string) {
+	mu.Lock()
+	h, ok := handles[email]
+	delete(handles, email)
+	mu.Unlock()
+	if ok {
+		h.bucket.Store(nil)
 	}
 }
 
-// Remove drops any bucket for the user. Safe to call when no entry exists.
-func Remove(email string) {
-	mu.Lock()
-	delete(buckets, email)
-	mu.Unlock()
-}
-
-// Bucket returns the bucket for the user, or nil if the user has no limit.
-// Callers must not cache it for the lifetime of a connection. Use Wait for
-// bounded reservations that observe runtime changes and cancellation.
+// Bucket returns the user's current bucket, or nil if the user has no limit.
+// It goes through the registry; the data path holds a Handle instead and
+// reads it without a lock.
 func Bucket(email string) *ratelimit.Bucket {
 	mu.RLock()
-	e, ok := buckets[email]
+	h, ok := handles[email]
 	mu.RUnlock()
 	if !ok {
 		return nil
 	}
-	return e.bucket
+	return h.bucket.Load()
 }
+
+// Bucket returns the limit this Handle enforces right now, or nil for none.
+func (h *Handle) Bucket() *ratelimit.Bucket { return h.bucket.Load() }

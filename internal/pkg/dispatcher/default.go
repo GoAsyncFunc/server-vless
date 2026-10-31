@@ -188,8 +188,11 @@ func (d *DefaultDispatcher) wrapDispatchLinks(ctx context.Context, inboundLink, 
 	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
 		outboundLink.Writer = &SizeStatWriter{Counter: c, Writer: outboundLink.Writer}
 	}
-	inboundLink.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: inboundLink.Writer}
-	outboundLink.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: outboundLink.Writer}
+	// One registry lookup per connection. Every chunk after this reads the
+	// limit with an atomic load and still sees Set and Remove.
+	limit := limiter.Lookup(user.Email)
+	inboundLink.Writer = &RateLimitedWriter{Context: ctx, Limit: limit, Writer: inboundLink.Writer}
+	outboundLink.Writer = &RateLimitedWriter{Context: ctx, Limit: limit, Writer: outboundLink.Writer}
 	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
 }
 
@@ -207,8 +210,9 @@ func (d *DefaultDispatcher) wrapDispatchLink(ctx context.Context, outbound *tran
 	if c := d.userCounter(user.Email, p.Stats.UserDownlink, "downlink"); c != nil {
 		outbound.Writer = &SizeStatWriter{Counter: c, Writer: outbound.Writer}
 	}
-	outbound.Reader = &RateLimitedReader{Context: ctx, Email: user.Email, Reader: outbound.Reader}
-	outbound.Writer = &RateLimitedWriter{Context: ctx, Email: user.Email, Writer: outbound.Writer}
+	limit := limiter.Lookup(user.Email)
+	outbound.Reader = &RateLimitedReader{Context: ctx, Limit: limit, Reader: outbound.Reader}
+	outbound.Writer = &RateLimitedWriter{Context: ctx, Limit: limit, Writer: outbound.Writer}
 	d.trackUserOnline(ctx, sessionInbound, user.Email, p.Stats.UserOnline)
 }
 
@@ -598,12 +602,12 @@ func (r *SizeStatReader) Interrupt() {
 // until enough tokens refill, observing runtime limit changes and cancellation.
 type RateLimitedWriter struct {
 	Context context.Context
-	Email   string
+	Limit   *limiter.Handle
 	Writer  buf.Writer
 }
 
 func (w *RateLimitedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
-	if err := limiter.Wait(w.Context, w.Email, int64(mb.Len())); err != nil {
+	if err := w.Limit.Wait(w.Context, int64(mb.Len())); err != nil {
 		buf.ReleaseMulti(mb)
 		return err
 	}
@@ -623,7 +627,7 @@ func (w *RateLimitedWriter) Interrupt() {
 // the outbound handler).
 type RateLimitedReader struct {
 	Context context.Context
-	Email   string
+	Limit   *limiter.Handle
 	Reader  buf.Reader
 }
 
@@ -635,7 +639,7 @@ func (r *RateLimitedReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 		// cancellation error from a wait that had nothing to wait for.
 		return mb, err
 	}
-	if waitErr := limiter.Wait(r.Context, r.Email, int64(mb.Len())); waitErr != nil {
+	if waitErr := r.Limit.Wait(r.Context, int64(mb.Len())); waitErr != nil {
 		buf.ReleaseMulti(mb)
 		return nil, waitErr
 	}

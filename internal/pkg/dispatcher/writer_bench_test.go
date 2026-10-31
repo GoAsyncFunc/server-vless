@@ -6,6 +6,8 @@ import (
 
 	appstats "github.com/xtls/xray-core/app/stats"
 	"github.com/xtls/xray-core/common/buf"
+
+	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 )
 
 type benchmarkSink struct{}
@@ -24,7 +26,7 @@ func BenchmarkWriterWrappers(b *testing.B) {
 				writer = &SizeStatWriter{Counter: new(appstats.Counter), Writer: writer}
 			}
 			if kind == "stats-unlimited" {
-				writer = &RateLimitedWriter{Context: context.Background(), Email: "benchmark-unlimited", Writer: writer}
+				writer = &RateLimitedWriter{Context: context.Background(), Limit: limiter.Lookup("benchmark-unlimited"), Writer: writer}
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
