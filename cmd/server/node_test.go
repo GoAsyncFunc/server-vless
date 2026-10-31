@@ -1,8 +1,10 @@
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	cli "github.com/urfave/cli/v2"
@@ -353,5 +355,60 @@ func TestDomainStrategyUsageMatchesXray(t *testing.T) {
 	}
 	if _, err := (&conf.FreedomConfig{TargetStrategy: "UseIPv4v6v6"}).Build(); err == nil {
 		t.Error("xray accepted UseIPv4v6v6; the guard assumes it is invalid")
+	}
+}
+
+// TestDurationFlagDefaultTextIsParseable is the same class of guard as the
+// domain-strategy one above. --help prints DefaultText as the value to copy, and
+// urfave/cli parses duration flags with time.ParseDuration, which needs a unit.
+// These flags advertised "60" while rejecting "60": a user who copied the
+// default out of --help got "invalid value \"60\" ... parse error" instead of a
+// running node.
+func TestDurationFlagDefaultTextIsParseable(t *testing.T) {
+	checked := 0
+	for _, f := range appFlags() {
+		durationFlag, ok := f.(*cli.DurationFlag)
+		if !ok || durationFlag.DefaultText == "" {
+			continue
+		}
+		checked++
+		if _, err := time.ParseDuration(durationFlag.DefaultText); err != nil {
+			t.Errorf("flag %s shows default %q, which it cannot parse: %v",
+				durationFlag.Name, durationFlag.DefaultText, err)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no duration flag carried a DefaultText; the guard checked nothing")
+	}
+}
+
+// TestDurationFlagUsageExamplesAreParseable covers the other half: the usage
+// strings name a sample value, and whatever they advertise has to be accepted,
+// or the help text walks the user straight into the error above.
+func TestDurationFlagUsageExamplesAreParseable(t *testing.T) {
+	example := regexp.MustCompile(`e\.g\. (\S+)`)
+	checked := 0
+	for _, f := range appFlags() {
+		durationFlag, ok := f.(*cli.DurationFlag)
+		if !ok {
+			continue
+		}
+		checked++
+		match := example.FindStringSubmatch(durationFlag.Usage)
+		if match == nil {
+			t.Errorf("flag %s names no example duration in its usage: %q",
+				durationFlag.Name, durationFlag.Usage)
+			continue
+		}
+		// The example sits inside a sentence, so drop the punctuation that
+		// follows it.
+		advertised := strings.TrimRight(match[1], ".,;:)")
+		if _, err := time.ParseDuration(advertised); err != nil {
+			t.Errorf("flag %s advertises %q, which it cannot parse: %v",
+				durationFlag.Name, advertised, err)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no duration flag found; the guard checked nothing")
 	}
 }
