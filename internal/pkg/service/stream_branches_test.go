@@ -171,3 +171,49 @@ func TestBuildStreamConfigRealityXverFallback(t *testing.T) {
 		t.Fatalf("xver = %v, want 7 from RealityConfig fallback", stream.REALITYSettings)
 	}
 }
+
+func TestBuildStreamConfigRealityRejectsEmptyDest(t *testing.T) {
+	// Neither dest nor server name: without the check this built ":443",
+	// which Xray dials as the local host.
+	v := &api.VlessNode{
+		Network:     "tcp",
+		TlsSettings: api.TlsSettings{PrivateKey: "test-private-key", ShortId: "abcd", ServerPort: "443"},
+	}
+	_, err := buildStreamConfig(v, &api.NodeInfo{Security: api.Reality}, &Config{})
+	if err == nil || !strings.Contains(err.Error(), "reality dest is empty") {
+		t.Fatalf("expected the empty dest to be rejected, got %v", err)
+	}
+}
+
+func TestBuildStreamConfigRealityRejectsInvalidDestPort(t *testing.T) {
+	for _, port := range []string{"abc", "0", "65536", "-1", "8443/tcp", "443,8443"} {
+		t.Run(port, func(t *testing.T) {
+			v := &api.VlessNode{
+				Network:     "tcp",
+				TlsSettings: api.TlsSettings{ServerName: "example.com", Dest: "example.com", ServerPort: port},
+			}
+			_, err := buildStreamConfig(v, &api.NodeInfo{Security: api.Reality}, &Config{})
+			if err == nil || !strings.Contains(err.Error(), "is not a valid TCP port") {
+				t.Fatalf("port %q: expected a port validation error, got %v", port, err)
+			}
+		})
+	}
+}
+
+func TestBuildStreamConfigRealityTrimsDestAndPort(t *testing.T) {
+	v := &api.VlessNode{
+		Network:     "tcp",
+		TlsSettings: api.TlsSettings{ServerName: "example.com", Dest: " example.com ", ServerPort: " 8443 "},
+	}
+	stream, err := buildStreamConfig(v, &api.NodeInfo{Security: api.Reality}, &Config{})
+	if err != nil {
+		t.Fatalf("buildStreamConfig returned error: %v", err)
+	}
+	var dest string
+	if err := json.Unmarshal(stream.REALITYSettings.Dest, &dest); err != nil {
+		t.Fatal(err)
+	}
+	if dest != "example.com:8443" {
+		t.Fatalf("reality dest = %q, want example.com:8443", dest)
+	}
+}

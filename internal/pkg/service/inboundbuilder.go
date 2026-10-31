@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	api "github.com/GoAsyncFunc/uniproxy/pkg"
@@ -158,13 +159,27 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 		realitySettings.ShortIds = []string{vlessInfo.TlsSettings.ShortId}
 		realitySettings.ServerNames = []string{vlessInfo.TlsSettings.ServerName}
 
-		dest := vlessInfo.TlsSettings.Dest
+		dest := strings.TrimSpace(vlessInfo.TlsSettings.Dest)
 		if dest == "" {
-			dest = vlessInfo.TlsSettings.ServerName
+			dest = strings.TrimSpace(vlessInfo.TlsSettings.ServerName)
 		}
-		destPort := vlessInfo.TlsSettings.ServerPort
+		// REALITY forwards every handshake it cannot authenticate to dest, so
+		// an empty value must not fall through: JoinHostPort would turn it
+		// into ":443", which Xray dials as the local host, and a node that
+		// listens on 443 itself would forward probes back into its own
+		// listener.
+		if dest == "" {
+			return nil, fmt.Errorf("reality dest is empty: set the panel's REALITY dest or server name")
+		}
+		destPort := strings.TrimSpace(vlessInfo.TlsSettings.ServerPort)
 		if destPort == "" {
 			destPort = "443"
+		}
+		// The panel sends the port as a string. Check it here, where the
+		// message can still name the field, instead of letting Xray reject
+		// the joined "host:port" later.
+		if port, err := strconv.Atoi(destPort); err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("reality dest port %q is not a valid TCP port", destPort)
 		}
 
 		// JoinHostPort handles bare/bracketed IPv6 without double brackets.
