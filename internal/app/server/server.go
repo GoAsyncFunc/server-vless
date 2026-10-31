@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -355,59 +356,103 @@ func (s *Server) loadCore(inboundConfig *core.InboundHandlerConfig, outboundConf
 	return pbCoreConfig, nil
 }
 
-// buildDNSConfig chooses DNS source in priority:
-// 1) CLI --dns (comma-separated)
-// 2) nodeInfo.RawDNS.DNSJson (v2board full DNS json)
-// 3) nodeInfo.RawDNS.DNSMap  (v2board per-domain DNS)
+// buildDNSConfig assembles the DNS config, in order of authority:
+// 1) CLI --dns (comma-separated), which replaces everything
+// 2) nodeInfo.RawDNS.DNSJson, the panel's "main" DNS route
+// 3) nodeInfo.RawDNS.DNSMap, the panel's per-domain DNS routes
 // 4) default 8.8.8.8
+//
+// DNSJson and DNSMap are not alternatives. UniProxy writes the route whose
+// first match is "main" to DNSJson and every other DNS route to DNSMap
+// (pkg/model.go:122-137), so one panel can produce both, and treating DNSJson
+// as a reason to skip DNSMap silently drops every per-domain route. The
+// per-domain servers are appended to the main config instead. Position does not
+// decide priority -- Xray matches the query against each server's domain rules
+// first and only falls back to the servers that do not match -- so appending
+// keeps each per-domain route in effect while the main servers handle the rest.
 func buildDNSConfig(cliDNS string, raw api.RawDNS) (*dns.Config, error) {
 	if cliDNS = strings.TrimSpace(cliDNS); cliDNS != "" {
 		return dnsFromList(strings.Split(cliDNS, ","))
 	}
+	if len(raw.DNSJson) == 0 && len(raw.DNSMap) == 0 {
+		return dnsFromList([]string{DefaultDNSServer})
+	}
+
+	dc := &conf.DNSConfig{}
 	if len(raw.DNSJson) != 0 {
-		dc := &conf.DNSConfig{}
 		if err := json.Unmarshal(raw.DNSJson, dc); err != nil {
 			return nil, fmt.Errorf("parse DNSJson: %w", err)
 		}
-		return dc.Build()
 	}
 	if len(raw.DNSMap) != 0 {
-		dc := &conf.DNSConfig{}
-		servers := make([]any, 0, len(raw.DNSMap))
-		for _, value := range raw.DNSMap {
-			entry := value
-			addr, _ := value["address"].(string)
-			if strings.Contains(addr, ":") && !strings.Contains(addr, "/") {
-				host, port, err := net.SplitHostPort(addr)
-				if err == nil {
-					if p, perr := strconv.ParseUint(port, 10, 16); perr == nil {
-						// Copy before rewriting. raw.DNSMap is the panel
-						// snapshot shared with the stored node info, so
-						// mutating it in place would make the hot-reload
-						// comparison see a permanent difference and force a
-						// restart on every inbound change.
-						entry = make(map[string]any, len(value)+1)
-						for k, v := range value {
-							entry[k] = v
-						}
-						entry["address"] = host
-						entry["port"] = uint16(p)
-					}
-				}
-			}
-			servers = append(servers, entry)
-		}
-		// DNSConfig.Servers is []*NameServerConfig; we need to go through JSON round-trip.
-		b, err := json.Marshal(map[string]any{"servers": servers})
+		perDomain, err := dnsMapConfig(raw.DNSMap)
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(b, dc); err != nil {
-			return nil, err
-		}
-		return dc.Build()
+		dc.Servers = append(dc.Servers, perDomain.Servers...)
 	}
-	return dnsFromList([]string{DefaultDNSServer})
+	return dc.Build()
+}
+
+// dnsMapConfig turns the panel's per-domain DNS routes into a DNS config.
+//
+// The map keys are route indices, so they are walked in numeric order: Go
+// randomises map iteration, and while Xray selects a server by domain match
+// rather than by position, the order still breaks ties between overlapping
+// rules and decides the fallback rotation. Leaving it random would make one
+// panel config resolve differently on every start.
+func dnsMapConfig(dnsMap map[string]map[string]any) (*conf.DNSConfig, error) {
+	keys := make([]string, 0, len(dnsMap))
+	for key := range dnsMap {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, leftErr := strconv.Atoi(keys[i])
+		right, rightErr := strconv.Atoi(keys[j])
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		// Not every key has to be an index -- nothing enforces it -- so fall
+		// back to a total order over the strings rather than dropping any.
+		return keys[i] < keys[j]
+	})
+
+	servers := make([]any, 0, len(keys))
+	for _, key := range keys {
+		value := dnsMap[key]
+		entry := value
+		addr, _ := value["address"].(string)
+		if strings.Contains(addr, ":") && !strings.Contains(addr, "/") {
+			host, port, err := net.SplitHostPort(addr)
+			if err == nil {
+				if p, perr := strconv.ParseUint(port, 10, 16); perr == nil {
+					// Copy before rewriting. raw.DNSMap is the panel
+					// snapshot shared with the stored node info, so
+					// mutating it in place would make the hot-reload
+					// comparison see a permanent difference and force a
+					// restart on every inbound change.
+					entry = make(map[string]any, len(value)+1)
+					for k, v := range value {
+						entry[k] = v
+					}
+					entry["address"] = host
+					entry["port"] = uint16(p)
+				}
+			}
+		}
+		servers = append(servers, entry)
+	}
+
+	// DNSConfig.Servers is []*NameServerConfig; we need to go through JSON round-trip.
+	b, err := json.Marshal(map[string]any{"servers": servers})
+	if err != nil {
+		return nil, err
+	}
+	dc := &conf.DNSConfig{}
+	if err := json.Unmarshal(b, dc); err != nil {
+		return nil, err
+	}
+	return dc, nil
 }
 
 func dnsFromList(servers []string) (*dns.Config, error) {

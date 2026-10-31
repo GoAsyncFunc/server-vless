@@ -2,6 +2,7 @@ package server
 
 import (
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -198,5 +199,77 @@ func TestBuildDNSConfigDefaultWhenAllSourcesEmpty(t *testing.T) {
 	}
 	if got := net.IP(cfg.NameServer[0].Address.Address.GetIp()).String(); got != DefaultDNSServer {
 		t.Fatalf("default server = %q, want %s", got, DefaultDNSServer)
+	}
+}
+
+// One panel can produce both DNS sources: UniProxy writes the route whose first
+// match is "main" to DNSJson and every other DNS route to DNSMap (pkg/model.go:
+// 122-137). Reading DNSJson as a reason to skip DNSMap dropped every per-domain
+// route, silently, whenever the panel had a main route configured.
+func TestBuildDNSConfigMergesPerDomainRoutesIntoDNSJson(t *testing.T) {
+	raw := api.RawDNS{
+		DNSJson: []byte(`{"servers":[{"address":"8.8.8.8","domains":["example.net"]}]}`),
+		DNSMap: map[string]map[string]any{
+			"3": {"address": "223.5.5.5", "domains": []any{"example.com"}},
+		},
+	}
+	cfg, err := buildDNSConfig("", raw)
+	if err != nil {
+		t.Fatalf("buildDNSConfig returned error: %v", err)
+	}
+	if len(cfg.NameServer) != 2 {
+		t.Fatalf("name server count = %d, want the main server plus the per-domain route", len(cfg.NameServer))
+	}
+	if got := net.IP(cfg.NameServer[0].Address.Address.GetIp()).String(); got != "8.8.8.8" {
+		t.Fatalf("first server = %q, want the main 8.8.8.8", got)
+	}
+	if got := net.IP(cfg.NameServer[1].Address.Address.GetIp()).String(); got != "223.5.5.5" {
+		t.Fatalf("second server = %q, want the appended per-domain 223.5.5.5", got)
+	}
+	if got := len(cfg.NameServer[1].Domain); got == 0 {
+		t.Fatal("per-domain server lost the domain filter that makes it per-domain")
+	}
+}
+
+// The DNSMap keys are route indices. Go randomises map iteration, and while
+// Xray picks a server by domain match rather than by position, the order still
+// breaks ties between overlapping rules and sets the fallback rotation -- so
+// without sorting, one panel config resolves differently on every start.
+func TestBuildDNSConfigOrdersDNSMapRoutesByIndex(t *testing.T) {
+	raw := api.RawDNS{
+		DNSMap: map[string]map[string]any{
+			"10": {"address": "10.0.0.10", "domains": []any{"ten.example.com"}},
+			"2":  {"address": "10.0.0.2", "domains": []any{"two.example.com"}},
+			"1":  {"address": "10.0.0.1", "domains": []any{"one.example.com"}},
+		},
+	}
+	cfg, err := buildDNSConfig("", raw)
+	if err != nil {
+		t.Fatalf("buildDNSConfig returned error: %v", err)
+	}
+	got := make([]string, 0, len(cfg.NameServer))
+	for _, ns := range cfg.NameServer {
+		got = append(got, net.IP(ns.Address.Address.GetIp()).String())
+	}
+	want := []string{"10.0.0.1", "10.0.0.2", "10.0.0.10"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("server order = %v, want %v (route index order, not lexicographic)", got, want)
+	}
+}
+
+// Nothing enforces that a DNSMap key is an index, so a key that is not one must
+// still make it into the config rather than being dropped by the sort.
+func TestBuildDNSConfigKeepsNonNumericDNSMapKeys(t *testing.T) {
+	raw := api.RawDNS{
+		DNSMap: map[string]map[string]any{
+			"primary": {"address": "8.8.8.8", "domains": []any{"example.com"}},
+		},
+	}
+	cfg, err := buildDNSConfig("", raw)
+	if err != nil {
+		t.Fatalf("buildDNSConfig returned error: %v", err)
+	}
+	if len(cfg.NameServer) != 1 {
+		t.Fatalf("name server count = %d, want the non-numeric key's server", len(cfg.NameServer))
 	}
 }
