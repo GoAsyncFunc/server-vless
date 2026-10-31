@@ -217,3 +217,11 @@ func TestBuildStreamConfigRealityTrimsDestAndPort(t *testing.T) {
 		t.Fatalf("reality dest = %q, want example.com:8443", dest)
 	}
 }
+
+func TestBuildStreamConfigRejectsNetworkSettingsForUnknownNetwork(t *testing.T) {
+	v := &api.VlessNode{Network: "quic", NetworkSettings: json.RawMessage(`{"security":"none"}`)}
+	_, err := buildStreamConfig(v, &api.NodeInfo{}, &Config{})
+	if err == nil || !strings.Contains(err.Error(), `network "quic" has no network settings builder`) {
+		t.Fatalf("expected the unknown network's settings to be rejected, got %v", err)
+	}
+}

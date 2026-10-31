@@ -125,6 +125,11 @@ func buildStreamConfig(vlessInfo *api.VlessNode, nodeInfo *api.NodeInfo, config 
 			err = buildHTTPUpgradeConfig(streamSetting, vlessInfo)
 		case "kcp", "mkcp":
 			err = buildKCPConfig(streamSetting, vlessInfo)
+		default:
+			// Dropping the settings on the floor would start a listener that
+			// disagrees with what the panel configured and leave nothing in
+			// the log to explain why clients cannot connect.
+			err = fmt.Errorf("network %q has no network settings builder; refusing to ignore the panel's settings", network)
 		}
 		if err != nil {
 			return nil, err
