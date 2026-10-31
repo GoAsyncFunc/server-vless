@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -79,7 +80,11 @@ type nodeInfoFetcher interface {
 var initialNodeInfoBackoffs = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
 
 // fetchInitialNodeInfo retries transient failures during startup (panel
-// temporarily unreachable, 5xx etc.). Max ~30s total: 1s, 2s, 4s, 8s, 15s.
+// temporarily unreachable, 5xx, 429). Max ~30s total: 1s, 2s, 4s, 8s, 15s.
+// A failure the next attempt cannot change -- a rejected token, an unknown
+// node ID, a body that does not parse -- returns at once, so the operator
+// sees the panel's answer instead of thirty seconds of retries that end in
+// the same message.
 func fetchInitialNodeInfo(ctx context.Context, client nodeInfoFetcher) (*api.NodeInfo, error) {
 	var lastErr error
 	for i, wait := range append([]time.Duration{0}, initialNodeInfoBackoffs...) {
@@ -95,9 +100,37 @@ func fetchInitialNodeInfo(ctx context.Context, client nodeInfoFetcher) (*api.Nod
 		if err == nil {
 			return info, nil
 		}
+		if !isTransientNodeInfoError(err) {
+			return nil, err
+		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// isTransientNodeInfoError reports whether another GetNodeInfo attempt can
+// succeed where this one failed. uniproxy classifies its own failures: a
+// network error, a 5xx or a 429 can clear while the node waits, while a 4xx
+// or an unparseable body is the panel's final answer for this configuration
+// (uniproxy has already retried the 5xx cases three times on its own). An
+// error uniproxy does not classify keeps the previous behaviour and is
+// retried.
+func isTransientNodeInfoError(err error) bool {
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		return true
+	}
+	switch {
+	case apiErr.IsNetworkError():
+		return true
+	case apiErr.IsParseError():
+		return false
+	case apiErr.StatusCode == http.StatusTooManyRequests, apiErr.StatusCode >= http.StatusInternalServerError:
+		return true
+	case apiErr.StatusCode >= http.StatusBadRequest:
+		return false
+	}
+	return true
 }
 
 func (s *Server) Start() error {

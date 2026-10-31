@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +24,10 @@ type nodeInfoResult struct {
 	info *api.NodeInfo
 	err  error
 }
+
+// nodeInfoPath is the panel path uniproxy reports in its errors; only its
+// shape matters here.
+const nodeInfoPath = "/api/v1/server/UniProxy/config"
 
 func (s *stubNodeInfoFetcher) GetNodeInfo(_ context.Context) (*api.NodeInfo, error) {
 	idx := int(s.calls.Add(1)) - 1
@@ -69,8 +75,8 @@ func TestFetchInitialNodeInfoRetriesUntilSuccess(t *testing.T) {
 	withFastBackoffs(t, 5)
 	want := &api.NodeInfo{Id: 7}
 	stub := &stubNodeInfoFetcher{results: []nodeInfoResult{
-		{err: errors.New("503 transient")},
-		{err: errors.New("503 transient")},
+		{err: api.NewNetworkError("request "+nodeInfoPath+" failed", nodeInfoPath, errors.New("dial tcp: connection refused"))},
+		{err: api.NewAPIErrorFromStatusCode(http.StatusServiceUnavailable, "maintenance", nodeInfoPath, nil)},
 		{info: want},
 	}}
 
@@ -86,6 +92,8 @@ func TestFetchInitialNodeInfoRetriesUntilSuccess(t *testing.T) {
 	}
 }
 
+// Errors uniproxy did not classify keep the old behaviour: retried until the
+// schedule runs out, then surfaced as-is.
 func TestFetchInitialNodeInfoExhaustsBackoffsAndReturnsLastError(t *testing.T) {
 	withFastBackoffs(t, 3)
 	finalErr := errors.New("final 500")
@@ -135,5 +143,54 @@ func TestFetchInitialNodeInfoHonorsContextCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestFetchInitialNodeInfoStopsOnErrorsARetryCannotFix(t *testing.T) {
+	withFastBackoffs(t, 5)
+	for name, cause := range map[string]error{
+		"401":         api.NewAPIErrorFromStatusCode(http.StatusUnauthorized, "token rejected", nodeInfoPath, nil),
+		"403":         api.NewAPIErrorFromStatusCode(http.StatusForbidden, "forbidden", nodeInfoPath, nil),
+		"404":         api.NewAPIErrorFromStatusCode(http.StatusNotFound, "node not found", nodeInfoPath, nil),
+		"400":         api.NewAPIErrorFromStatusCode(http.StatusBadRequest, "bad request", nodeInfoPath, nil),
+		"parse":       api.NewParseError("decode vless params error", errors.New("unexpected end of JSON input")),
+		"wrapped 401": fmt.Errorf("startup: %w", api.NewAPIErrorFromStatusCode(http.StatusUnauthorized, "token rejected", nodeInfoPath, nil)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubNodeInfoFetcher{results: []nodeInfoResult{{err: cause}}}
+
+			got, err := fetchInitialNodeInfo(context.Background(), stub)
+			if got != nil {
+				t.Fatalf("expected nil node info, got %+v", got)
+			}
+			if !errors.Is(err, cause) {
+				t.Fatalf("got %v, want the panel's own error %v", err, cause)
+			}
+			if calls := stub.calls.Load(); calls != 1 {
+				t.Fatalf("expected a single attempt, got %d", calls)
+			}
+		})
+	}
+}
+
+func TestFetchInitialNodeInfoRetriesThrottlingAndServerErrors(t *testing.T) {
+	withFastBackoffs(t, 5)
+	want := &api.NodeInfo{Id: 9}
+	stub := &stubNodeInfoFetcher{results: []nodeInfoResult{
+		{err: api.NewAPIErrorFromStatusCode(http.StatusTooManyRequests, "slow down", nodeInfoPath, nil)},
+		{err: api.NewAPIErrorFromStatusCode(http.StatusBadGateway, "upstream unavailable", nodeInfoPath, nil)},
+		{err: api.NewNetworkError("request "+nodeInfoPath+" failed", nodeInfoPath, errors.New("i/o timeout"))},
+		{info: want},
+	}}
+
+	got, err := fetchInitialNodeInfo(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if calls := stub.calls.Load(); calls != 4 {
+		t.Fatalf("expected 4 calls, got %d", calls)
 	}
 }
