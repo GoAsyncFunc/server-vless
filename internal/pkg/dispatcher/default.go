@@ -522,6 +522,12 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 				return
 			}
 		} else {
+			// Upstream's distinction, ported: "no rule matched" is ErrNoClue
+			// and routine; anything else is the router failing, and must not
+			// read like a quiet fall-through to the default outbound.
+			if !stderrors.Is(err, common.ErrNoClue) {
+				errors.LogErrorInner(ctx, err, "CustomDispatcher: failed to pick route for ", destination)
+			}
 			errors.LogInfo(ctx, "CustomDispatcher: default route for ", destination)
 		}
 	}
