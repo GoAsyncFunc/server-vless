@@ -620,7 +620,7 @@ func (b *Builder) heartbeatMonitor() error {
 
 	data := make(map[int][]netip.Addr, len(users))
 	for _, user := range users {
-		name := "user>>>" + buildUserEmail(tag, user.Id, user.Uuid) + ">>>online"
+		name := onlineMapName(buildUserEmail(tag, user.Id, user.Uuid))
 		om := statsManager.GetOnlineMap(name)
 		if om == nil {
 			continue
@@ -748,11 +748,16 @@ func (b *Builder) pruneRetiredLocked(expired map[string]struct{}) {
 	for email := range expired {
 		delete(b.retiredUsers, email)
 		delete(b.retiredAt, email)
-		b.unregisterTrafficCounters(email)
+		b.unregisterIdentityStats(email)
 	}
 }
 
-func (b *Builder) unregisterTrafficCounters(email string) {
+// unregisterIdentityStats drops the stats objects Xray holds for an identity
+// whose tag is gone. That is the two traffic counters plus the online map the
+// dispatcher creates on the first connection: leaving the map behind would keep
+// one live map per retired identity for the life of the process, which is the
+// same leak the counters had.
+func (b *Builder) unregisterIdentityStats(email string) {
 	statsManager, ok := b.instance.GetFeature(stats.ManagerType()).(stats.Manager)
 	if !ok {
 		return
@@ -760,6 +765,11 @@ func (b *Builder) unregisterTrafficCounters(email string) {
 	upName, downName := trafficCounterNames(email)
 	_ = statsManager.UnregisterCounter(upName)
 	_ = statsManager.UnregisterCounter(downName)
+	_ = statsManager.UnregisterOnlineMap(onlineMapName(email))
+}
+
+func onlineMapName(email string) string {
+	return "user>>>" + email + ">>>online"
 }
 
 func (b *Builder) addNewUser(userInfo []api.UserInfo) error {

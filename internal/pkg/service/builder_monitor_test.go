@@ -530,6 +530,12 @@ func TestReportTrafficPrunesRetiredIdentitiesPastTheirTTL(t *testing.T) {
 	email := b.retiredOrder[0]
 	b.retiredAt[email] = time.Now().Add(-retiredIdentityTTL - time.Second)
 	addTestTraffic(t, instance, email, 77, 0)
+	// The dispatcher creates this on the first connection, so a retired
+	// identity that ever carried traffic has one.
+	sm := testStatsManager(t, instance)
+	if _, err := sm.GetOrRegisterOnlineMap(onlineMapName(email)); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := b.reportTrafficsMonitor(); err != nil {
 		t.Fatal(err)
@@ -543,12 +549,14 @@ func TestReportTrafficPrunesRetiredIdentitiesPastTheirTTL(t *testing.T) {
 	if len(b.retiredOrder) != 0 {
 		t.Fatalf("retiredOrder = %v, want it empty after the only entry expired", b.retiredOrder)
 	}
-	sm := testStatsManager(t, instance)
 	if c := sm.GetCounter("user>>>" + email + ">>>traffic>>>uplink"); c != nil {
 		t.Fatal("uplink counter survived the prune")
 	}
 	if c := sm.GetCounter("user>>>" + email + ">>>traffic>>>downlink"); c != nil {
 		t.Fatal("downlink counter survived the prune")
+	}
+	if om := sm.GetOnlineMap(onlineMapName(email)); om != nil {
+		t.Fatal("online map survived the prune")
 	}
 }
 
