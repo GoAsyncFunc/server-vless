@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/GoAsyncFunc/server-vless/internal/pkg/limiter"
 	"github.com/xtls/xray-core/features/inbound"
 )
@@ -33,11 +35,7 @@ func (b *Builder) shutdown() error {
 	// owner closes the core. This does not guarantee delivery after process kill.
 	if b.instance != nil {
 		if manager, ok := b.instance.GetFeature(inbound.ManagerType()).(inbound.Manager); ok {
-			if _, err := manager.GetHandler(ctx, b.inboundTag); err == nil {
-				if err := manager.RemoveHandler(ctx, b.inboundTag); err != nil {
-					return fmt.Errorf("stop inbound: %w", err)
-				}
-			}
+			b.stopInboundListener(ctx, manager)
 		}
 	}
 	var err error
@@ -59,4 +57,23 @@ func (b *Builder) shutdown() error {
 		return fmt.Errorf("final traffic report failed (pending data retained in memory): %w", err)
 	}
 	return nil
+}
+
+// stopInboundListener closes the listening socket so nothing new arrives while
+// the final drain runs.
+//
+// A failure is logged, never returned. The drain in shutdown is the only thing
+// that gets pending traffic to the panel and Close is a sync.Once, so treating
+// this as fatal would drop metered bytes for good -- and a listener that will
+// not stop is not a reason to stop reporting what we already metered. Xray's
+// manager fails this only when the tag is already gone, which the GetHandler
+// probe covers, but the interface promises nothing of the sort, so keep the
+// failure non-fatal.
+func (b *Builder) stopInboundListener(ctx context.Context, manager inbound.Manager) {
+	if _, err := manager.GetHandler(ctx, b.inboundTag); err != nil {
+		return
+	}
+	if err := manager.RemoveHandler(ctx, b.inboundTag); err != nil {
+		log.Errorln("Failed to remove inbound handler during shutdown:", err)
+	}
 }

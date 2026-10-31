@@ -127,14 +127,15 @@ func (s *Server) Start() error {
 			if err := s.service.Close(); err != nil {
 				log.Errorf("service cleanup after failed start: %s", err)
 				if errors.Is(err, service.ErrShutdownIncomplete) {
-					return
+					log.Error("core cleanup will continue even though a background task has not exited")
 				}
 			}
 			s.service = nil
 		}
 		if s.instance != nil {
+			instance := s.instance
 			done := make(chan error, 1)
-			go func() { done <- s.instance.Close() }()
+			go func() { done <- instance.Close() }()
 			select {
 			case err := <-done:
 				if err != nil {

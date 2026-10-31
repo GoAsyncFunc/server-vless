@@ -256,10 +256,27 @@ func (h *fakeInboundHandler) ProxySettings() *serial.TypedMessage    { return ni
 // the swap path does not use fail loudly instead of returning zero values.
 type probeInboundManager struct {
 	inbound.Manager
-	added   []inbound.Handler
-	removed []string
-	failTag string
-	onAdd   func()
+	added         []inbound.Handler
+	removed       []string
+	handlers      map[string]inbound.Handler
+	failTag       string
+	failRemoveTag string
+	onAdd         func()
+}
+
+func (m *probeInboundManager) GetHandler(_ context.Context, tag string) (inbound.Handler, error) {
+	if handler, ok := m.handlers[tag]; ok {
+		return handler, nil
+	}
+	return nil, errors.New("handler not found: " + tag)
+}
+
+func (m *probeInboundManager) RemoveHandler(_ context.Context, tag string) error {
+	m.removed = append(m.removed, tag)
+	if tag == m.failRemoveTag {
+		return errors.New("no such handler: " + tag)
+	}
+	return nil
 }
 
 func (m *probeInboundManager) AddHandler(_ context.Context, handler inbound.Handler) error {
@@ -270,11 +287,6 @@ func (m *probeInboundManager) AddHandler(_ context.Context, handler inbound.Hand
 		return errors.New("bind: address already in use")
 	}
 	m.added = append(m.added, handler)
-	return nil
-}
-
-func (m *probeInboundManager) RemoveHandler(_ context.Context, tag string) error {
-	m.removed = append(m.removed, tag)
 	return nil
 }
 
@@ -355,5 +367,38 @@ func TestActivateInboundDropsLimitsWhenTheNewHandlerFailsToStart(t *testing.T) {
 	}
 	if _, ok := limiter.AcquireDevice(email, "192.0.2.2"); !ok {
 		t.Fatal("limits for a tag that never went live were left registered")
+	}
+}
+
+// shutdown drains pending traffic after closing the listener. A listener that
+// will not close must not take that drain down with it: the drain is the only
+// thing that gets metered bytes to the panel, and Close is a sync.Once, so
+// bailing out would lose them for good. The failure has to stay a log line,
+// which is why this returns nothing to bail on.
+func TestStopInboundListenerTreatsRemovalFailureAsNonFatal(t *testing.T) {
+	const tag = "vless_1"
+	manager := &probeInboundManager{
+		handlers:      map[string]inbound.Handler{tag: &fakeInboundHandler{tag: tag}},
+		failRemoveTag: tag,
+	}
+	b := &Builder{instance: newStatlessInstance(t), inboundTag: tag}
+
+	b.stopInboundListener(context.Background(), manager)
+
+	if !slices.Equal(manager.removed, []string{tag}) {
+		t.Fatalf("removed = %v, want one attempt at %q", manager.removed, tag)
+	}
+}
+
+// A tag that is already gone needs no removal, and asking for one must not be
+// turned into an error the caller could act on.
+func TestStopInboundListenerSkipsAnAbsentTag(t *testing.T) {
+	manager := &probeInboundManager{}
+	b := &Builder{instance: newStatlessInstance(t), inboundTag: "vless_1"}
+
+	b.stopInboundListener(context.Background(), manager)
+
+	if len(manager.removed) != 0 {
+		t.Fatalf("removed = %v, want no attempt for a tag with no handler", manager.removed)
 	}
 }
