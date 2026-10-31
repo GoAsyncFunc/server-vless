@@ -251,6 +251,14 @@ func runVlessNode(_ *cli.Context) (err error) {
 
 	osSignals := make(chan os.Signal, 1)
 	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
-	<-osSignals
+	sig := <-osSignals
+	// Hand both signals back to the runtime before the deferred Close runs.
+	// Close can legitimately take tens of seconds (task drain, final traffic
+	// report, core shutdown), and with Notify still active a second Ctrl-C or
+	// SIGTERM only sat in the channel, leaving SIGKILL as the operator's way
+	// out. After Stop the next signal terminates the process the way it would
+	// have without a handler.
+	signal.Stop(osSignals)
+	log.Infof("received %s, shutting down; send it again to exit immediately", sig)
 	return nil
 }
