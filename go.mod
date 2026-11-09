@@ -5,7 +5,7 @@ go 1.27
 toolchain go1.27.3
 
 require (
-	github.com/GoAsyncFunc/uniproxy v0.1.4
+	github.com/GoAsyncFunc/uniproxy v0.1.7
 	github.com/juju/ratelimit v1.0.2
 	github.com/sirupsen/logrus v1.10.2
 	github.com/urfave/cli/v2 v2.27.7
